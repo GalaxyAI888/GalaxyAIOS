@@ -29,9 +29,7 @@
 
 官网下载wsl镜像：
 
-```
 [GalaxyAI](https://www.aiverse.vip/GalaxyAI/GalaxyAIOS_V0.1_win.tgz)
-```
 
 ### 其他安装方式
 
