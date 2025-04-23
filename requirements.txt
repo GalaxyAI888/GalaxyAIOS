@@ -1,0 +1,13 @@
+psutil
+alembic
+pydantic
+pyyaml
+fastapi
+uvicorn
+sqlmodel
+pyjwt
+setproctitle
+pydantic_settings
+fastapi_cdn_host
+argon2-cffi
+aiosqlite
