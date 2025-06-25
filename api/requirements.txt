@@ -11,3 +11,8 @@ pydantic_settings
 fastapi_cdn_host
 argon2-cffi
 aiosqlite
+
+#aigc task
+httpx>=0.24.0
+minio>=7.1.0
+

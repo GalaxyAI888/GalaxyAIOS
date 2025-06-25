@@ -53,6 +53,29 @@ class Config(BaseSettings):
         log_dir: Directory to store logs.
         bin_dir: Directory to store additional binaries, e.g., versioned backend executables.
         pipx_path: Path to the pipx executable, used to install versioned backends.
+
+        # 任务控制
+        max_retries: int = 3  # ==== AIGC 专用配置 ====
+        poll_interval: int = 60  # ==== AIGC 专用配置 ====
+
+        # ==== AIGC 专用配置 ====
+        # API 配置
+        api_base_url: str = "http://82.156.86.71:8082"
+        task_path: str = "/parseapi/parse/classes/AITask"
+        # 安全配置
+        parse_app_id: str = "BTGAPPId"
+        parse_api_key: str = "BTGAPIKEY"
+        # 模型服务
+        sd_api: str = "http://127.0.0.1:7860"
+        tts_api: str = "http://127.0.0.1:8084/v1/audio/speech"
+        stt_api: str = "http://127.0.0.1:8083/v1/audio/transcriptions"
+        # MinIO
+        minio_endpoint: str = "82.156.86.71:9000"
+        minio_bucket: str = "aitask"
+        minio_access_key: str = "7yG6o8Fx5FODZayRkaN6"
+        minio_secret_key: str = "NDBKpRdNcauBXweruwkOu4pbqItIcIkYmVlmbCBB"
+
+
     """
 
     # Common options
@@ -90,6 +113,28 @@ class Config(BaseSettings):
     resources: Optional[dict] = None
     bin_dir: Optional[str] = None
     pipx_path: Optional[str] = None
+
+    # 任务控制
+    max_retries: int = 3  # ==== AIGC 专用配置 ====
+    poll_interval: int = 60  # ==== AIGC 专用配置 ====
+
+    # ==== AIGC 专用配置 ====
+    # API 配置
+    api_base_url: str = "http://82.156.86.71:8082"
+    task_path: str = "/parseapi/parse/classes/AITask"
+    # 安全配置
+    parse_app_id: str = "BTGAPPId"
+    parse_api_key: str = "BTGAPIKEY"
+    # 模型服务
+    sd_api: str = "http://192.168.11.171:7860"
+    tts_api: str = "http://127.0.0.1:8084/v1/audio/speech"
+    stt_api: str = "http://127.0.0.1:8083/v1/audio/transcriptions"
+    # MinIO
+    minio_endpoint: str = "82.156.86.71:9000"
+    minio_bucket: str = "aitask"
+    minio_access_key: str = "7yG6o8Fx5FODZayRkaN6"
+    minio_secret_key: str = "NDBKpRdNcauBXweruwkOu4pbqItIcIkYmVlmbCBB"
+
 
     def __init__(self, **values):
         super().__init__(**values)

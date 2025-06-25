@@ -121,3 +121,13 @@ def terminate_process(process):
             except psutil.NoSuchProcess:
                 pass
 
+
+def ensure_tmp_directory():
+    """确保临时目录存在"""
+    tmp_dir = "tmp"
+    if not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir)
+        logger.info(f"创建临时目录: {tmp_dir}")
+    else:
+        logger.debug(f"临时目录已存在: {tmp_dir}")
+
