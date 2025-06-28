@@ -152,11 +152,23 @@ class Config(BaseSettings):
         if self.log_dir is None:
             self.log_dir = os.path.join(self.data_dir, "log")
 
-        if not self._is_server() and not self.token:
-            raise Exception("Token is required when running as a worker")
+        # 智能设置 server_url 默认值
+        if self.server_url is None:
+            # 如果没有设置 server_url，根据是否禁用工作器来决定
+            if self.disable_worker:
+                # 如果禁用工作器，说明是纯服务器模式，不需要 server_url
+                self.server_url = None
+            else:
+                # 如果启用工作器，设置默认的 server_url
+                self.server_url = "http://127.0.0.1:9999"
 
+        # 先准备 token，再检查
         self.prepare_token()
         self.prepare_jwt_secret_key()
+
+        # 检查 token 要求
+        if not self._is_server() and not self.token:
+            raise Exception("Token is required when running as a worker")
 
         # server options
         self.init_database_url()

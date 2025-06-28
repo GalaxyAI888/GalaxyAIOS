@@ -21,10 +21,10 @@ if TYPE_CHECKING:
 
 
 class SourceEnum(str, Enum):
-    HUGGING_FACE = "huggingface"
-    OLLAMA_LIBRARY = "ollama_library"
-    MODEL_SCOPE = "model_scope"
-    LOCAL_PATH = "local_path"
+    HUGGING_FACE = "HUGGING_FACE"
+    OLLAMA_LIBRARY = "OLLAMA_LIBRARY"
+    MODEL_SCOPE = "MODEL_SCOPE"
+    LOCAL_PATH = "LOCAL_PATH"
 
 
 class CategoryEnum(str, Enum):

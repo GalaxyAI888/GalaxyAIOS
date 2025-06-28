@@ -147,20 +147,20 @@ async def create_model_file(session: SessionDep, model_file_in: ModelFileCreate)
     return model_file
 
 
-# @router.put("/{id}", response_model=ModelFilePublic)
-# async def update_model_file(
-#     session: SessionDep, id: int, model_file_in: ModelFileUpdate
-# ):
-#     model_file = await ModelFile.one_by_id(session, id)
-#     if not model_file:
-#         raise NotFoundException(message=f"Model file {id} not found")
+@router.put("/{id}", response_model=ModelFilePublic)
+async def update_model_file(
+    session: SessionDep, id: int, model_file_in: ModelFileUpdate
+):
+    model_file = await ModelFile.one_by_id(session, id)
+    if not model_file:
+        raise NotFoundException(message=f"Model file {id} not found")
 
-#     try:
-#         await model_file.update(session, model_file_in)
-#     except Exception as e:
-#         raise InternalServerErrorException(message=f"Failed to update model file: {e}")
+    try:
+        await model_file.update(session, model_file_in)
+    except Exception as e:
+        raise InternalServerErrorException(message=f"Failed to update model file: {e}")
 
-#     return model_file
+    return model_file
 
 
 @router.delete("/{id}")

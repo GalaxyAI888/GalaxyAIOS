@@ -9,9 +9,19 @@ from aistack.api.model_file_routes import router as model_file_router
 
 
 api_router = APIRouter(responses=error_responses)
+
+v_router = APIRouter()
+
+
 api_router.include_router(users.router, tags=["users"], prefix="/users")
-api_router.include_router(aigc_router, tags=["task"], prefix="/aigc")
-api_router.include_router(model_file_router, tags=["Model Files"],prefix="/model-files")
+v_router.include_router(aigc_router, tags=["task"], prefix="/aigc")
+v_router.include_router(model_file_router, tags=["Model Files"],prefix="/model-files")
+
+
+api_router.include_router(
+    v_router,  prefix="/v1"
+)
+
 
 
 
