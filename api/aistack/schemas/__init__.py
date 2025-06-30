@@ -7,6 +7,13 @@ from aistack.schemas.model_files import (
     ModelFilePublic,
     ModelFilesPublic,
 )
+from aistack.schemas.preset_models import (
+    PresetModelInfo,
+    PresetModelWithStatus,
+    PresetModelsResponse,
+    PresetModelDownloadRequest,
+)
+
 __all__ = ["User",
            "UserCreate",
            "UserUpdate",
@@ -16,5 +23,9 @@ __all__ = ["User",
            "ModelFileCreate",
            "ModelFileUpdate",
            "ModelFilePublic",
-           "ModelFilesPublic"
+           "ModelFilesPublic",
+           "PresetModelInfo",
+           "PresetModelWithStatus",
+           "PresetModelsResponse",
+           "PresetModelDownloadRequest"
            ]

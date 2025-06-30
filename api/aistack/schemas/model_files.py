@@ -27,6 +27,15 @@ class ModelFileBase(SQLModel, ModelSource):
     state_message: Optional[str] = Field(
         default=None, sa_column=Column(Text, nullable=True)
     )
+    
+    # 预设模型相关字段
+    is_preset_model: bool = Field(default=False, index=True)  # 是否为预设模型
+    preset_model_id: Optional[str] = Field(default=None, index=True)  # 预设模型ID
+    preset_model_name: Optional[str] = Field(default=None)  # 预设模型名称
+    preset_model_description: Optional[str] = Field(default=None)  # 预设模型描述
+    preset_model_category: Optional[str] = Field(default=None)  # 预设模型分类
+    preset_model_tags: Optional[List[str]] = Field(sa_column=Column(JSON), default=None)  # 预设模型标签
+    preset_model_recommended: Optional[bool] = Field(default=False)  # 是否为推荐模型
 
 
 class ModelFile(ModelFileBase, BaseModelMixin, table=True):
