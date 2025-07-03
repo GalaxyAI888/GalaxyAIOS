@@ -66,7 +66,7 @@ class Config(BaseSettings):
         parse_app_id: str = "BTGAPPId"
         parse_api_key: str = "BTGAPIKEY"
         # 模型服务
-        sd_api: str = "http://127.0.0.1:7860"
+        sd_api: str = "http://192.168.11.171:7860"
         tts_api: str = "http://127.0.0.1:8084/v1/audio/speech"
         stt_api: str = "http://127.0.0.1:8083/v1/audio/transcriptions"
         # MinIO
@@ -75,6 +75,8 @@ class Config(BaseSettings):
         minio_access_key: str = "7yG6o8Fx5FODZayRkaN6"
         minio_secret_key: str = "NDBKpRdNcauBXweruwkOu4pbqItIcIkYmVlmbCBB"
 
+        # 大模型API超时时间（秒）
+        model_api_timeout: int = 120
 
     """
 
@@ -135,6 +137,8 @@ class Config(BaseSettings):
     minio_access_key: str = "7yG6o8Fx5FODZayRkaN6"
     minio_secret_key: str = "NDBKpRdNcauBXweruwkOu4pbqItIcIkYmVlmbCBB"
 
+    # 大模型API超时时间（秒）
+    model_api_timeout: int = 300
 
     def __init__(self, **values):
         super().__init__(**values)

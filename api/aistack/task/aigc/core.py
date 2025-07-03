@@ -66,7 +66,7 @@ class AIGCProcessor:
         response = httpx.post(
             f"{Config().sd_api}/sdapi/v1/txt2img",
             json=task["data"],
-            timeout=120.0
+            timeout=Config().model_api_timeout
         )
         response.raise_for_status()
         logger.info(f"txt2img任务 {task['objectId']} 处理成功，生成{len(response.json()['images'])}张图片。")
@@ -87,10 +87,35 @@ class AIGCProcessor:
     def _process_img2img(self, task: dict) -> list:
         """图生图任务处理"""
         logger.info(f"开始处理img2img任务: {task['objectId']}")
+        # 预处理 init_images
+        init_images = task["data"].get("init_images", [])
+        processed_images = []
+        for img in init_images:
+            if isinstance(img, str):
+                if img.startswith("data:image"):
+                    # 去掉前缀
+                    base64_data = img.split(",", 1)[-1]
+                    processed_images.append(base64_data)
+                elif img.startswith("http://") or img.startswith("https://"):
+                    # 下载图片并转base64
+                    try:
+                        resp = httpx.get(img, timeout=Config().model_api_timeout)
+                        resp.raise_for_status()
+                        b64_img = base64.b64encode(resp.content).decode("utf-8")
+                        processed_images.append(b64_img)
+                    except Exception as e:
+                        logger.error(f"下载图片失败: {img} - {e}")
+                        continue
+                else:
+                    # 假设已是base64
+                    processed_images.append(img)
+            else:
+                logger.warning(f"init_images中存在非字符串类型: {type(img)}，已跳过。")
+        task["data"]["init_images"] = processed_images
         response = httpx.post(
             f"{Config().sd_api}/sdapi/v1/img2img",
             json=task["data"],
-            timeout=120.0
+            timeout=Config().model_api_timeout
         )
         response.raise_for_status()
         logger.info(f"img2img任务 {task['objectId']} 处理成功，生成{len(response.json()['images'])}张图片。")
@@ -114,7 +139,7 @@ class AIGCProcessor:
         response = httpx.post(
             Config().tts_api,
             json=task["data"],
-            timeout=120.0
+            timeout=Config().model_api_timeout
         )
         response.raise_for_status()
         logger.info(f"txt2speech任务 {task['objectId']} 处理成功，生成{len(response.json()['audio'])}个音频片段。")
@@ -157,7 +182,7 @@ class AIGCProcessor:
                 response = httpx.post(
                     Config().stt_api,
                     files=files,
-                    timeout=120.0
+                    timeout=Config().model_api_timeout
                 )
                 response.raise_for_status()
             logger.info(f"语音识别API调用成功，响应状态码: {response.status_code}")

@@ -89,7 +89,7 @@ preset_models:
     category: "speech-to-text"
     source: "MODEL_SCOPE"
     model_scope_model_id: "openai-mirror/whisper-base"
-    model_scope_file_path: "model.safetensors"
+    #model_scope_file_path: "model.safetensors" #如果没有这一行，那么下载整个目录
     size: 304506470 # 约300MB
     tags: ["whisper", "speech-to-text", "modelscope", "damo", "chinese"]
     recommended: true
