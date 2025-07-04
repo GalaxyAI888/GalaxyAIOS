@@ -138,7 +138,7 @@ class Config(BaseSettings):
     minio_secret_key: str = "NDBKpRdNcauBXweruwkOu4pbqItIcIkYmVlmbCBB"
 
     # 大模型API超时时间（秒）
-    model_api_timeout: int = 300
+    model_api_timeout: int = 900
 
     def __init__(self, **values):
         super().__init__(**values)
