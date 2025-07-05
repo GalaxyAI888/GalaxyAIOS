@@ -1,0 +1,11 @@
+{
+    "type": "speech2txt",
+    "designer": "web3账户1",
+    "owner": "web3账户2",
+    "excutor": "web3账户3",
+    "status": 0,
+    "data": {
+        "input": "account123/test.mp3",
+        "model": "whisper-small"
+    }
+}

@@ -142,24 +142,50 @@ class AIGCProcessor:
             timeout=Config().model_api_timeout
         )
         response.raise_for_status()
-        logger.info(f"txt2speech任务 {task['objectId']} 处理成功，生成{len(response.json()['audio'])}个音频片段。")
         
-        audio_list = response.json()["audio"]
-
-        urls = []
-        for i, audio_data_b64 in enumerate(audio_list):
-            audio_data = base64.b64decode(audio_data_b64)
-            file_name = f"{task['objectId']}_{i}.wav"
+        # 检查响应内容类型
+        content_type = response.headers.get('content-type', '')
+        logger.info(f"TTS API响应内容类型: {content_type}")
+        
+        if 'audio' in content_type:
+            # 直接返回音频文件
+            audio_data = response.content
+            file_name = f"{task['objectId']}.mp3"
             object_path = f"{self.account_id}/{file_name}"
-            logger.info(f"正在为任务 {task['objectId']} 上传音频 {i+1} 到MinIO: {object_path}")
+            logger.info(f"正在为任务 {task['objectId']} 上传音频文件到MinIO: {object_path}")
             url = self.minio.upload_file(
                 data=audio_data,
                 object_path=object_path
             )
-            urls.append(url)
-            logger.info(f"音频 {i+1} 上传成功，URL: {url}")
-        logger.info(f"txt2speech任务 {task['objectId']} 所有音频上传完成。")
-        return urls
+            logger.info(f"音频文件上传成功，URL: {url}")
+            return [url]
+        else:
+            # 尝试解析JSON响应（兼容旧格式）
+            try:
+                response_json = response.json()
+                if 'audio' in response_json:
+                    audio_list = response_json["audio"]
+                    logger.info(f"txt2speech任务 {task['objectId']} 处理成功，生成{len(audio_list)}个音频片段。")
+                    
+                    urls = []
+                    for i, audio_data_b64 in enumerate(audio_list):
+                        audio_data = base64.b64decode(audio_data_b64)
+                        file_name = f"{task['objectId']}_{i}.wav"
+                        object_path = f"{self.account_id}/{file_name}"
+                        logger.info(f"正在为任务 {task['objectId']} 上传音频 {i+1} 到MinIO: {object_path}")
+                        url = self.minio.upload_file(
+                            data=audio_data,
+                            object_path=object_path
+                        )
+                        urls.append(url)
+                        logger.info(f"音频 {i+1} 上传成功，URL: {url}")
+                    logger.info(f"txt2speech任务 {task['objectId']} 所有音频上传完成。")
+                    return urls
+                else:
+                    raise ValueError("响应中没有找到audio字段")
+            except Exception as e:
+                logger.error(f"解析TTS响应失败: {e}")
+                raise ValueError(f"无法解析TTS API响应: {e}")
 
     def _process_speech2txt(self, task: dict) -> list:
         """语音转文本任务处理"""

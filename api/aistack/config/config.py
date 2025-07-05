@@ -129,8 +129,8 @@ class Config(BaseSettings):
     parse_api_key: str = "BTGAPIKEY"
     # 模型服务
     sd_api: str = "http://192.168.11.171:7860"
-    tts_api: str = "http://127.0.0.1:8084/v1/audio/speech"
-    stt_api: str = "http://127.0.0.1:8083/v1/audio/transcriptions"
+    tts_api: str = "http://192.168.11.171:9093/v1/audio/speech"
+    stt_api: str = "http://192.168.11.171:9093/v1/audio/transcriptions"
     # MinIO
     minio_endpoint: str = "82.156.86.71:9000"
     minio_bucket: str = "aitask"
