@@ -69,13 +69,31 @@ class Server(object):
 
     def _run_migrations(self):
         logger.info("Running database migration.")
-        migrations_files_path = os.path.join(project_path, "migrations")
-        alembic_cfg = AlembicConfig()
-        alembic_cfg.set_main_option(
-            "script_location", migrations_files_path)
-        alembic_cfg.set_main_option("sqlalchemy.url", self._config.database_url)
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Database migration completed.")
+        try:
+            migrations_files_path = os.path.join(project_path, "migrations")
+            alembic_cfg = AlembicConfig()
+            alembic_cfg.set_main_option(
+                "script_location", migrations_files_path)
+            alembic_cfg.set_main_option("sqlalchemy.url", self._config.database_url)
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Database migration completed.")
+        except Exception as e:
+            logger.warning(f"Migration failed: {e}")
+            logger.info("Trying to create tables directly...")
+            try:
+                from sqlmodel import SQLModel, create_engine
+                # 导入所有模型以确保它们被注册到SQLModel.metadata
+                import aistack.schemas.apps
+                import aistack.schemas.users
+                import aistack.schemas.model_files
+                import aistack.schemas.preset_models
+                
+                engine = create_engine(self._config.database_url)
+                SQLModel.metadata.create_all(engine)
+                logger.info("Tables created successfully.")
+            except Exception as create_error:
+                logger.error(f"Failed to create tables: {create_error}")
+                raise
 
     async def _prepare_data(self):
         self._setup_data_dir(self._config.data_dir)
