@@ -39,6 +39,8 @@ class AIGCProcessor:
                 result = self._process_img2img(task)
             elif task["type"] == "txt2speech":
                 result = self._process_txt2speech(task)
+            elif task["type"] == "txt2music":
+                result = self._process_txt2music(task)
             elif task["type"] == "speech2txt":
                 result = self._process_speech2txt(task)
             else:
@@ -186,6 +188,60 @@ class AIGCProcessor:
             except Exception as e:
                 logger.error(f"解析TTS响应失败: {e}")
                 raise ValueError(f"无法解析TTS API响应: {e}")
+
+    def _process_txt2music(self, task: dict) -> list:
+        """文本转音乐任务处理"""
+        logger.info(f"开始处理txt2music任务: {task['objectId']} | 文本长度: {len(task['data'].get('text', ''))}字符")
+        response = httpx.post(
+            Config().music_api,
+            json=task["data"],
+            timeout=Config().model_api_timeout
+        )
+        response.raise_for_status()
+        
+        # 检查响应内容类型
+        content_type = response.headers.get('content-type', '')
+        logger.info(f"Music API响应内容类型: {content_type}")
+        
+        if 'audio' in content_type:
+            # 直接返回音频文件
+            audio_data = response.content
+            file_name = f"{task['objectId']}.mp3"
+            object_path = f"{self.account_id}/{file_name}"
+            logger.info(f"正在为任务 {task['objectId']} 上传音乐文件到MinIO: {object_path}")
+            url = self.minio.upload_file(
+                data=audio_data,
+                object_path=object_path
+            )
+            logger.info(f"音乐文件上传成功，URL: {url}")
+            return [url]
+        else:
+            # 尝试解析JSON响应（兼容旧格式）
+            try:
+                response_json = response.json()
+                if 'audio' in response_json:
+                    audio_list = response_json["audio"]
+                    logger.info(f"txt2music任务 {task['objectId']} 处理成功，生成{len(audio_list)}个音乐片段。")
+                    
+                    urls = []
+                    for i, audio_data_b64 in enumerate(audio_list):
+                        audio_data = base64.b64decode(audio_data_b64)
+                        file_name = f"{task['objectId']}_{i}.mp3"
+                        object_path = f"{self.account_id}/{file_name}"
+                        logger.info(f"正在为任务 {task['objectId']} 上传音乐 {i+1} 到MinIO: {object_path}")
+                        url = self.minio.upload_file(
+                            data=audio_data,
+                            object_path=object_path
+                        )
+                        urls.append(url)
+                        logger.info(f"音乐 {i+1} 上传成功，URL: {url}")
+                    logger.info(f"txt2music任务 {task['objectId']} 所有音乐上传完成。")
+                    return urls
+                else:
+                    raise ValueError("响应中没有找到audio字段")
+            except Exception as e:
+                logger.error(f"解析Music API响应失败: {e}")
+                raise ValueError(f"无法解析Music API响应: {e}")
 
     def _process_speech2txt(self, task: dict) -> list:
         """语音转文本任务处理"""

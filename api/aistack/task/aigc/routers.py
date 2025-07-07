@@ -30,10 +30,10 @@ def run_processor(account_id, task_type):
 async def start_task(request: TaskRequest):
     """
     启动指定类型任务处理器
-    - task_type: 任务类型 (txt2img/img2img/txt2speech/speech2txt)
+    - task_type: 任务类型 (txt2img/img2img/txt2speech/txt2music/speech2txt)
     - account_id: 账户标识
     """
-    VALID_TYPES = ["txt2img", "img2img", "txt2speech", "speech2txt"]
+    VALID_TYPES = ["txt2img", "img2img", "txt2speech", "txt2music", "speech2txt"]
     if request.task_type not in VALID_TYPES:
         raise HTTPException(
             status_code=400,
@@ -78,7 +78,7 @@ async def start_task(request: TaskRequest):
 @aigc_router.post("/tasks/stop")
 async def stop_task(request: TaskRequest):
     """停止指定任务处理器
-    - task_type: 任务类型 (txt2img/img2img/txt2speech/speech2txt)
+    - task_type: 任务类型 (txt2img/img2img/txt2speech/txt2music/speech2txt)
     - account_id: 账户标识
     """
     process_key = f"{request.task_type}::{request.account_id}"

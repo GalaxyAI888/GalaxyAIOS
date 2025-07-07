@@ -131,6 +131,7 @@ class Config(BaseSettings):
     sd_api: str = "http://192.168.11.171:7860"
     tts_api: str = "http://192.168.11.171:9093/v1/audio/speech"
     stt_api: str = "http://192.168.11.171:9093/v1/audio/transcriptions"
+    music_api: str = "http://192.168.11.171:9094/v1/music/generate"
     # MinIO
     minio_endpoint: str = "82.156.86.71:9000"
     minio_bucket: str = "aitask"

@@ -321,4 +321,19 @@ async def get_image_info(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询镜像信息失败: {e}") 
+        raise HTTPException(status_code=500, detail=f"查询镜像信息失败: {e}")
+
+
+@router.get("/volumes/reverse-lookup", summary="根据本地路径查找映射的应用及卷信息")
+async def reverse_lookup_volumes(
+    session: SessionDep,
+    host_path: str = Query(..., description="要查询的本地路径")
+    
+):
+    """根据本地路径查找所有映射该路径的应用及卷信息"""
+    try:
+        app_service = AppService()
+        result = await app_service.find_apps_by_host_path(session, host_path)
+        return {"host_path": host_path, "mappings": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查找host_path映射失败: {e}") 

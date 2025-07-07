@@ -638,4 +638,28 @@ class AppService:
         except Exception as e:
             await session.rollback()
             logger.error(f"清理应用实例失败: {e}")
-            return {"success": False, "message": f"清理失败: {e}"} 
+            return {"success": False, "message": f"清理失败: {e}"}
+    
+    async def find_apps_by_host_path(self, session: AsyncSession, host_path: str) -> List[Dict[str, Any]]:
+        """根据本地路径查找所有映射该路径的应用及卷信息"""
+        try:
+            # 查询所有应用
+            apps = await session.exec(select(App))
+            result = []
+            for app in apps.all():
+                if not app.volumes:
+                    continue
+                for volume in app.volumes:
+                    # 兼容volume为dict或AppVolume对象
+                    v_host_path = volume["host_path"] if isinstance(volume, dict) else getattr(volume, "host_path", None)
+                    if v_host_path and v_host_path.rstrip("/\\") == host_path.rstrip("/\\"):
+                        result.append({
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "display_name": app.display_name,
+                            "volume": volume
+                        })
+            return result
+        except Exception as e:
+            logger.error(f"查找host_path映射失败: {e}")
+            raise 
