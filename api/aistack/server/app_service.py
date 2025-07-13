@@ -1,6 +1,10 @@
 import logging
 import asyncio
-from typing import List, Optional, Dict, Any
+import tempfile
+import os
+import shutil
+import urllib.request
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
 from sqlmodel import select, Session
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -19,6 +23,67 @@ class AppService:
     
     def __init__(self):
         self.docker_manager = DockerManager()
+
+    def _download_dockerfile(self, url: str, temp_dir: str) -> Tuple[bool, str]:
+        """
+        从URL下载Dockerfile到临时目录
+        
+        Args:
+            url: Dockerfile的URL地址
+            temp_dir: 临时目录路径
+            
+        Returns:
+            Tuple[bool, str]: (是否成功, 成功时返回Dockerfile路径/失败时返回错误信息)
+        """
+        dockerfile_path = os.path.join(temp_dir, "Dockerfile")
+        try:
+            urllib.request.urlretrieve(url, dockerfile_path)
+            return True, dockerfile_path
+        except Exception as e:
+            return False, f"下载Dockerfile失败: {str(e)}"
+
+    def _create_temp_dir(self) -> str:
+        """
+        创建临时目录
+        
+        Returns:
+            str: 临时目录路径
+        """
+        return tempfile.mkdtemp()
+
+    def _cleanup_temp_dir(self, temp_dir: Optional[str]) -> None:
+        """
+        清理临时目录
+        
+        Args:
+            temp_dir: 临时目录路径
+        """
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def _update_build_status(
+        self, 
+        session: AsyncSession,
+        app: App,
+        status: AppStatusEnum,
+        build_status: str,
+        message: str
+    ) -> None:
+        """
+        更新应用构建状态
+        
+        Args:
+            session: 数据库会话
+            app: 应用实例
+            status: 应用状态
+            build_status: 构建状态
+            message: 状态消息
+        """
+        async with session.begin():
+            app.status = status
+            app.build_status = build_status
+            app.build_message = message
+            app.build_finished_at = datetime.utcnow()
     
     async def create_app(self, session: AsyncSession, app_data: AppCreate) -> AppPublic:
         """创建应用"""
@@ -181,29 +246,47 @@ class AppService:
     
     async def _build_image_async(self, session: AsyncSession, app_id: int):
         """异步获取镜像（构建或拉取）"""
+        temp_dir = None
         try:
             logger.info(f"开始异步获取镜像，应用ID: {app_id}")
             
-            # 重新获取应用信息（因为可能在其他协程中被修改）
             async with session.begin():
                 app = await session.get(App, app_id)
                 if not app:
                     logger.error(f"应用不存在: {app_id}")
                     return
             
-            # 根据镜像获取方式执行相应操作
             if app.image_source == ImageSourceEnum.BUILD:
-                # 构建镜像
                 if not app.dockerfile_path:
                     raise ValueError("构建模式需要指定Dockerfile路径")
-                
-                success, message = self.docker_manager.build_image(
-                    dockerfile_path=app.dockerfile_path,
-                    image_name=app.image_name,
-                    image_tag=app.image_tag
-                )
+
+                build_context_path = app.dockerfile_path
+                if app.dockerfile_path.startswith(("http://", "https://")):
+                    temp_dir = self._create_temp_dir()
+                    success, result = self._download_dockerfile(app.dockerfile_path, temp_dir)
+                    
+                    if not success:
+                        await self._update_build_status(
+                            session, app,
+                            AppStatusEnum.BUILD_FAILED,
+                            "failed",
+                            result
+                        )
+                        self._cleanup_temp_dir(temp_dir)
+                        return
+                    
+                    build_context_path = temp_dir
+
+                try:
+                    success, message = self.docker_manager.build_image(
+                        dockerfile_path=build_context_path,
+                        image_name=app.image_name,
+                        image_tag=app.image_tag
+                    )
+                finally:
+                    self._cleanup_temp_dir(temp_dir)
+
             elif app.image_source == ImageSourceEnum.PULL:
-                # 拉取镜像
                 image_name = app.image_url or app.image_name
                 success, message = self.docker_manager.pull_image(
                     image_name=image_name,
@@ -212,21 +295,17 @@ class AppService:
             else:
                 raise ValueError(f"不支持的镜像获取方式: {app.image_source}")
             
-            # 更新构建结果
-            async with session.begin():
-                app = await session.get(App, app_id)
-                app.build_finished_at = datetime.utcnow()
-                
-                if success:
-                    app.status = AppStatusEnum.STOPPED
-                    app.build_status = "success"
-                    app.build_message = message
-                    logger.info(f"应用 {app.name} 镜像获取成功")
-                else:
-                    app.status = AppStatusEnum.BUILD_FAILED
-                    app.build_status = "failed"
-                    app.build_message = message
-                    logger.error(f"应用 {app.name} 镜像获取失败: {message}")
+            await self._update_build_status(
+                session, app,
+                AppStatusEnum.STOPPED if success else AppStatusEnum.BUILD_FAILED,
+                "success" if success else "failed",
+                message
+            )
+            
+            if success:
+                logger.info(f"应用 {app.name} 镜像获取成功")
+            else:
+                logger.error(f"应用 {app.name} 镜像获取失败: {message}")
             
         except Exception as e:
             logger.error(f"异步获取镜像过程中发生异常: {e}")
@@ -240,6 +319,7 @@ class AppService:
                         app.build_finished_at = datetime.utcnow()
             except Exception as update_error:
                 logger.error(f"更新构建状态失败: {update_error}")
+            self._cleanup_temp_dir(temp_dir)
     
     async def get_build_status(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """获取构建状态"""
