@@ -721,17 +721,32 @@ class AppService:
                         cpu_limit=app.cpu_limit
                     )
                    
-                    # 只有容器启动成功才创建实例记录
+                                        # 只有容器启动成功才创建实例记录
                     if success:
+                        # 获取容器的初始网络信息
+                        ip_address = None
+                        exposed_ports = {}
+                        if container_id:
+                            status_success, status_message, status_info = self.docker_manager.get_container_status(container_id)
+                            if status_success:
+                                ip_address = status_info['ip_address']
+                                exposed_ports = status_info['ports']
+                        
                         # 创建新实例
                         instance = AppInstance(
                             app_id=app_id,
                             status=AppStatusEnum.RUNNING,
                             status_message="容器启动成功",
                             container_id=container_id,
-                            started_at=datetime.utcnow()
+                            started_at=datetime.utcnow(),
+                            ip_address=ip_address,
+                            exposed_ports=exposed_ports
                         )
                         new_session.add(instance)
+                        
+                        # 更新应用状态为运行中
+                        app.status = AppStatusEnum.RUNNING
+                        
                         await new_session.flush()
                         await new_session.refresh(instance)
                         instance_id = instance.id
@@ -739,7 +754,7 @@ class AppService:
                         # 容器启动失败，不创建实例记录
                         instance_id = None
                         logger.warning(f"容器启动失败，不创建实例记录: {message}")
-                   
+                    
                     # 事务会自动提交
            
             return {"success": success, "message": message, "instance_id": instance_id}
@@ -783,10 +798,13 @@ class AppService:
                         except Exception as e:
                             logger.warning(f"删除容器时发生异常: {e}")
                    
-                    # 删除实例记录
+                                        # 删除实例记录
                     await new_session.delete(instance)
                     logger.info(f"已删除应用实例记录: {instance.id}")
-                   
+                    
+                    # 更新应用状态为已停止
+                    app.status = AppStatusEnum.STOPPED
+                    
                     # 事务会自动提交
            
             return {"success": success, "message": message}
@@ -813,8 +831,12 @@ class AppService:
                     )
                     instance = result.first()
                    
-                    # 如果没有实例，返回应用本身的状态
+                    # 如果没有实例，确保应用状态为已停止
                     if not instance:
+                        # 如果应用状态不是已停止，更新它
+                        if app.status != AppStatusEnum.STOPPED:
+                            app.status = AppStatusEnum.STOPPED
+                        
                         return {
                             "success": True,
                             "app_name": app.name,
@@ -832,9 +854,14 @@ class AppService:
                         success, message, status_info = self.docker_manager.get_container_status(instance.container_id)
                         if success:
                             # 更新实例状态
-                            instance.status = AppStatusEnum.RUNNING if status_info['running'] else AppStatusEnum.STOPPED
+                            new_instance_status = AppStatusEnum.RUNNING if status_info['running'] else AppStatusEnum.STOPPED
+                            instance.status = new_instance_status
                             instance.ip_address = status_info['ip_address']
                             instance.exposed_ports = status_info['ports']
+                            
+                            # 同步应用状态
+                            app.status = new_instance_status
+                            
                             # 事务会自动提交
                    
                     return {
@@ -914,6 +941,27 @@ class AppService:
                         app = await new_session.get(App, instance.app_id)
                         app_public = AppPublic.from_orm(app) if app else None
                         
+                        # 如果有容器ID，实时获取容器状态和统计信息
+                        if instance.container_id:
+                            # 获取容器状态
+                            status_success, status_message, status_info = self.docker_manager.get_container_status(instance.container_id)
+                            if status_success:
+                                # 更新实例状态信息
+                                instance.status = AppStatusEnum.RUNNING if status_info['running'] else AppStatusEnum.STOPPED
+                                instance.ip_address = status_info['ip_address']
+                                instance.exposed_ports = status_info['ports']
+                            else:
+                                # 容器不存在或获取状态失败，标记为错误状态
+                                instance.status = AppStatusEnum.ERROR
+                                instance.status_message = status_message
+                            
+                            # 获取容器统计信息
+                            stats_success, stats_message, stats_info = self.docker_manager.get_container_stats(instance.container_id)
+                            if stats_success:
+                                # 更新实例统计信息
+                                instance.memory_usage = stats_info['memory_usage']
+                                instance.cpu_usage = stats_info['cpu_usage']
+                        
                         # 手动构建 AppInstancePublic 对象
                         instance_data = {
                             "id": instance.id,
@@ -967,7 +1015,11 @@ class AppService:
                         # 删除实例记录
                         await new_session.delete(instance)
                         cleaned_count += 1  # 统计删除的实例记录数量
-                   
+                    
+                    # 如果有实例被清理，确保应用状态为已停止
+                    if cleaned_count > 0:
+                        app.status = AppStatusEnum.STOPPED
+                    
                     # 事务会自动提交
            
             return {
@@ -1017,7 +1069,11 @@ class AppService:
                         await new_session.delete(instance)
                         cleaned_count += 1  # 统计删除的实例记录数量
                         logger.info(f"已删除实例记录: ID={instance.id}")
-                   
+                    
+                    # 如果有实例被清理，确保应用状态为已停止
+                    if cleaned_count > 0:
+                        app.status = AppStatusEnum.STOPPED
+                    
                     # 事务会自动提交
            
             return {
