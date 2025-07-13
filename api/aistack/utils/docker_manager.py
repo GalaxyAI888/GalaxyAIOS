@@ -21,6 +21,64 @@ class DockerManager:
             logger.error(f"Docker客户端初始化失败: {e}")
             raise
     
+    def _check_build_context_permissions(self, dockerfile_dir: str) -> Tuple[bool, str]:
+        """
+        检查构建上下文目录的权限
+        
+        Args:
+            dockerfile_dir: Dockerfile所在目录
+            
+        Returns:
+            (是否可访问, 错误信息)
+        """
+        try:
+            # 检查目录是否存在
+            if not os.path.exists(dockerfile_dir):
+                return False, f"构建上下文目录不存在: {dockerfile_dir}"
+            
+            # 检查目录权限
+            if not os.access(dockerfile_dir, os.R_OK):
+                return False, f"没有读取构建上下文目录的权限: {dockerfile_dir}"
+            
+            # 检查目录是否可执行（对于Docker构建很重要）
+            if not os.access(dockerfile_dir, os.X_OK):
+                return False, f"没有执行构建上下文目录的权限: {dockerfile_dir}"
+            
+            # 检查Docker是否可以访问该目录
+            # 在Linux系统上，检查目录所有者
+            if os.name == 'posix':
+                try:
+                    import pwd
+                    import grp
+                    
+                    # 获取当前用户信息
+                    current_uid = os.getuid()
+                    current_gid = os.getgid()
+                    
+                    # 获取目录所有者信息
+                    dir_stat = os.stat(dockerfile_dir)
+                    dir_uid = dir_stat.st_uid
+                    dir_gid = dir_stat.st_gid
+                    
+                    # 检查当前用户是否是目录所有者
+                    if dir_uid != current_uid:
+                        # 检查当前用户是否在docker组中
+                        try:
+                            docker_group = grp.getgrnam('docker')
+                            if current_gid not in [g.gr_gid for g in [grp.getgrgid(gid) for gid in os.getgroups()]]:
+                                logger.warning(f"当前用户可能没有足够的权限访问目录: {dockerfile_dir}")
+                                logger.warning("建议将目录权限设置为当前用户可访问")
+                        except (KeyError, ImportError):
+                            logger.warning("无法检查docker组权限")
+                            
+                except (ImportError, OSError):
+                    logger.warning("无法检查用户权限信息")
+            
+            return True, "权限检查通过"
+            
+        except Exception as e:
+            return False, f"权限检查失败: {e}"
+
     def build_image(self, dockerfile_path: str, image_name: str, image_tag: str = "latest", 
                    build_args: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
         """
@@ -42,22 +100,79 @@ class DockerManager:
             if not os.path.exists(dockerfile_path):
                 return False, f"Dockerfile不存在: {dockerfile_path}"
             
+            # 检查Dockerfile是否是文件而不是目录
+            if os.path.isdir(dockerfile_path):
+                return False, f"Dockerfile路径指向一个目录而不是文件: {dockerfile_path}"
+            
             # 获取Dockerfile所在目录
             dockerfile_dir = os.path.dirname(os.path.abspath(dockerfile_path))
             dockerfile_name = os.path.basename(dockerfile_path)
             
-            # 构建镜像
-            image, build_logs = self.client.images.build(
-                path=dockerfile_dir,
-                dockerfile=dockerfile_name,
-                tag=f"{image_name}:{image_tag}",
-                buildargs=build_args or {},
-                rm=True  # 构建完成后删除中间容器
-            )
+            # 检查构建上下文权限
+            context_ok, context_error = self._check_build_context_permissions(dockerfile_dir)
+            if not context_ok:
+                return False, context_error
             
-            logger.info(f"镜像构建成功: {image.tags}")
-            return True, f"镜像构建成功: {image.tags[0]}"
+            # 检查Dockerfile权限
+            if not os.access(dockerfile_path, os.R_OK):
+                return False, f"没有读取Dockerfile的权限: {dockerfile_path}"
             
+            # 验证Dockerfile内容
+            try:
+                with open(dockerfile_path, 'r') as f:
+                    content = f.read().strip()
+                    if not content:
+                        return False, f"Dockerfile内容为空: {dockerfile_path}"
+                    
+                    # 检查是否包含Dockerfile的基本指令
+                    if not any(keyword in content.upper() for keyword in ['FROM', 'RUN', 'CMD', 'ENTRYPOINT', 'COPY', 'ADD']):
+                        logger.warning(f"Dockerfile可能不是有效的: {dockerfile_path}")
+                        logger.warning(f"Dockerfile内容前100字符: {content[:100]}")
+            except Exception as e:
+                return False, f"无法读取Dockerfile内容: {e}"
+            
+            logger.info(f"构建上下文目录: {dockerfile_dir}")
+            logger.info(f"Dockerfile名称: {dockerfile_name}")
+            logger.info(f"Dockerfile完整路径: {dockerfile_path}")
+            
+            # 构建镜像，添加更多错误处理
+            try:
+                logger.info(f"开始Docker构建，上下文目录: {dockerfile_dir}")
+                logger.info(f"Dockerfile名称: {dockerfile_name}")
+                
+                # 简化构建调用，移除可能导致问题的参数
+                image, build_logs = self.client.images.build(
+                    path=dockerfile_dir,
+                    dockerfile=dockerfile_name,
+                    tag=f"{image_name}:{image_tag}",
+                    buildargs=build_args or {},
+                    rm=True  # 构建完成后删除中间容器
+                )
+                
+                # 简化日志处理
+                logger.info(f"构建完成，镜像标签: {image.tags}")
+                return True, f"镜像构建成功: {image.tags[0]}"
+                
+            except docker.errors.BuildError as e:
+                error_msg = f"镜像构建失败: {e}"
+                logger.error(error_msg)
+                # 简化错误日志处理
+                if hasattr(e, 'build_log') and e.build_log:
+                    logger.error("构建错误日志:")
+                    for log in e.build_log:
+                        if isinstance(log, dict):
+                            if 'error' in log:
+                                logger.error(f"错误: {log['error']}")
+                            elif 'stream' in log:
+                                logger.error(f"日志: {log['stream'].strip()}")
+                        else:
+                            logger.error(f"日志: {log}")
+                return False, error_msg
+                
+        except docker.errors.APIError as e:
+            error_msg = f"Docker API错误: {e}"
+            logger.error(error_msg)
+            return False, error_msg
         except Exception as e:
             error_msg = f"镜像构建失败: {e}"
             logger.error(error_msg)

@@ -24,6 +24,56 @@ class AppService:
    
     def __init__(self):
         self.docker_manager = DockerManager()
+        self._check_docker_permissions()
+
+    def _check_docker_permissions(self) -> None:
+        """
+        检查Docker权限和配置
+        """
+        try:
+            # 检查Docker守护进程是否运行
+            self.docker_manager.client.ping()
+            logger.info("Docker守护进程连接正常")
+            
+            # 检查Docker版本
+            version_info = self.docker_manager.client.version()
+            logger.info(f"Docker版本: {version_info.get('Version', 'Unknown')}")
+            
+            # 检查Docker信息
+            info = self.docker_manager.client.info()
+            logger.info(f"Docker根目录: {info.get('DockerRootDir', 'Unknown')}")
+            
+        except Exception as e:
+            logger.warning(f"Docker权限检查失败: {e}")
+            logger.warning("请确保Docker守护进程正在运行，并且当前用户有权限访问Docker")
+
+    def _fix_temp_dir_permissions(self, temp_dir: str) -> bool:
+        """
+        修复临时目录权限
+        
+        Args:
+            temp_dir: 临时目录路径
+            
+        Returns:
+            bool: 是否成功修复权限
+        """
+        try:
+            import stat
+            
+            # 设置目录权限为755 (rwxr-xr-x)
+            os.chmod(temp_dir, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            
+            # 确保父目录也有正确的权限
+            parent_dir = os.path.dirname(temp_dir)
+            if os.path.exists(parent_dir):
+                os.chmod(parent_dir, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            
+            logger.info(f"临时目录权限设置成功: {temp_dir}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"设置临时目录权限失败: {e}")
+            return False
 
     def _download_dockerfile(self, url: str, temp_dir: str) -> Tuple[bool, str]:
         """
@@ -38,19 +88,86 @@ class AppService:
         """
         dockerfile_path = os.path.join(temp_dir, "Dockerfile")
         try:
-            urllib.request.urlretrieve(url, dockerfile_path)
+            import urllib.request
+            import urllib.error
+            
+            logger.info(f"开始下载Dockerfile: {url}")
+            
+            # 设置请求头，模拟浏览器请求
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            # 下载文件
+            with urllib.request.urlopen(req) as response:
+                with open(dockerfile_path, 'wb') as f:
+                    f.write(response.read())
+            
+            # 设置文件权限为644 (rw-r--r--)
+            os.chmod(dockerfile_path, 0o644)
+            
+            # 验证文件内容
+            with open(dockerfile_path, 'r') as f:
+                content = f.read().strip()
+                if not content:
+                    return False, "下载的Dockerfile内容为空"
+                
+                # 检查是否包含Dockerfile的基本指令
+                if not any(keyword in content.upper() for keyword in ['FROM', 'RUN', 'CMD', 'ENTRYPOINT', 'COPY', 'ADD']):
+                    logger.warning("下载的文件可能不是有效的Dockerfile")
+                
+                # 记录Dockerfile内容的前几行
+                lines = content.split('\n')
+                logger.info(f"Dockerfile内容预览:")
+                for i, line in enumerate(lines[:5]):
+                    logger.info(f"  {i+1}: {line}")
+                if len(lines) > 5:
+                    logger.info(f"  ... (共 {len(lines)} 行)")
+            
+            logger.info(f"Dockerfile下载成功: {dockerfile_path}")
+            logger.info(f"Dockerfile大小: {len(content)} 字节")
             return True, dockerfile_path
+            
+        except urllib.error.URLError as e:
+            error_msg = f"下载Dockerfile失败 - URL错误: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
         except Exception as e:
-            return False, f"下载Dockerfile失败: {str(e)}"
+            error_msg = f"下载Dockerfile失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
 
     def _create_temp_dir(self) -> str:
         """
-        创建临时目录
+        创建临时目录（在当前目录的tmp文件夹下）
        
         Returns:
             str: 临时目录路径
         """
-        return tempfile.mkdtemp()
+        import os
+        import uuid
+        
+        # 在当前目录下创建tmp文件夹
+        current_dir = os.getcwd()
+        tmp_base_dir = os.path.join(current_dir, "tmp")
+        
+        # 确保tmp目录存在
+        if not os.path.exists(tmp_base_dir):
+            os.makedirs(tmp_base_dir, mode=0o755, exist_ok=True)
+            logger.info(f"创建tmp目录: {tmp_base_dir}")
+        
+        # 在tmp目录下创建唯一的子目录，使用更清晰的命名
+        unique_id = str(uuid.uuid4())[:8]
+        temp_dir = os.path.join(tmp_base_dir, f"build_{unique_id}")
+        
+        # 创建临时目录
+        os.makedirs(temp_dir, mode=0o755, exist_ok=True)
+        
+        # 修复权限
+        self._fix_temp_dir_permissions(temp_dir)
+        
+        logger.info(f"创建临时目录: {temp_dir}")
+        return temp_dir
 
     def _cleanup_temp_dir(self, temp_dir: Optional[str]) -> None:
         """
@@ -59,8 +176,13 @@ class AppService:
         Args:
             temp_dir: 临时目录路径
         """
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.info(f"清理临时目录: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"清理临时目录失败: {temp_dir}, 错误: {e}")
 
     async def _update_build_status(
         self,
@@ -381,8 +503,16 @@ class AppService:
                     build_context_path = temp_dir
 
                 try:
+                    # 根据路径类型决定如何传递Dockerfile路径
+                    if app_info['dockerfile_path'].startswith(("http://", "https://")):
+                        # HTTP路径：使用临时目录中的Dockerfile
+                        dockerfile_path = os.path.join(build_context_path, "Dockerfile")
+                    else:
+                        # 本地路径：直接使用原始路径
+                        dockerfile_path = build_context_path
+                    
                     success, message = self.docker_manager.build_image(
-                        dockerfile_path=build_context_path,
+                        dockerfile_path=dockerfile_path,
                         image_name=app_info['image_name'],
                         image_tag=app_info['image_tag']
                     )
@@ -682,7 +812,7 @@ class AppService:
         except Exception as e:
             logger.error(f"获取镜像信息失败: {e}")
             return {"success": False, "message": f"获取镜像信息失败: {e}"}
-   
+
     async def start_app(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """启动应用"""
         try:
@@ -717,7 +847,7 @@ class AppService:
                         cpu_limit=app.cpu_limit
                     )
                    
-                                        # 只有容器启动成功才创建实例记录
+                    # 只有容器启动成功才创建实例记录
                     if success:
                         # 获取容器的初始网络信息
                         ip_address = None
@@ -758,7 +888,7 @@ class AppService:
         except Exception as e:
             logger.error(f"启动应用失败: {e}")
             return {"success": False, "message": f"启动失败: {e}"}
-   
+
     async def stop_app(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """停止应用"""
         try:
@@ -794,7 +924,7 @@ class AppService:
                         except Exception as e:
                             logger.warning(f"删除容器时发生异常: {e}")
                    
-                                        # 删除实例记录
+                        # 删除实例记录
                     await new_session.delete(instance)
                     logger.info(f"已删除应用实例记录: {instance.id}")
                     
@@ -808,7 +938,7 @@ class AppService:
         except Exception as e:
             logger.error(f"停止应用失败: {e}")
             return {"success": False, "message": f"停止失败: {e}"}
-   
+
     async def get_app_status(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """获取应用状态"""
         try:
@@ -859,23 +989,23 @@ class AppService:
                             app.status = new_instance_status
                             
                             # 事务会自动提交
-                   
-                    return {
-                        "success": True,
-                        "app_name": app.name,
-                        "status": instance.status,
-                        "message": instance.status_message,
-                        "container_id": instance.container_id,
-                        "started_at": instance.started_at,
-                        "stopped_at": instance.stopped_at,
-                        "ip_address": instance.ip_address,
-                        "exposed_ports": instance.exposed_ports
-                    }
            
+            return {
+                "success": True,
+                "app_name": app.name,
+                "status": instance.status,
+                "message": instance.status_message,
+                "container_id": instance.container_id,
+                "started_at": instance.started_at,
+                "stopped_at": instance.stopped_at,
+                "ip_address": instance.ip_address,
+                "exposed_ports": instance.exposed_ports
+            }
+       
         except Exception as e:
             logger.error(f"获取应用状态失败: {e}")
             return {"success": False, "message": f"获取状态失败: {e}"}
-   
+
     async def get_app_stats(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """获取应用资源统计"""
         try:
@@ -906,16 +1036,16 @@ class AppService:
                         instance.cpu_usage = stats_info['cpu_usage']
                         # 事务会自动提交
                    
-                    return {
-                        "success": success,
-                        "message": message,
-                        "stats": stats_info if success else None
-                    }
-           
+            return {
+                "success": success,
+                "message": message,
+                "stats": stats_info if success else None
+            }
+       
         except Exception as e:
             logger.error(f"获取应用统计失败: {e}")
             return {"success": False, "message": f"获取统计失败: {e}"}
-   
+
     async def list_app_instances(self, session: AsyncSession, app_id: int) -> List[AppInstancePublic]:
         """列出应用实例"""
         try:
@@ -978,11 +1108,11 @@ class AppService:
                         public_instances.append(AppInstancePublic(**instance_data))
                    
                     return public_instances
-           
+       
         except Exception as e:
             logger.error(f"列出应用实例失败: {e}")
             raise
-   
+
     async def cleanup_app_instances(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """清理应用实例"""
         try:
@@ -1027,7 +1157,7 @@ class AppService:
         except Exception as e:
             logger.error(f"清理应用实例失败: {e}")
             return {"success": False, "message": f"清理失败: {e}"}
-    
+
     async def cleanup_error_instances(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """清理错误的应用实例"""
         try:
@@ -1081,7 +1211,7 @@ class AppService:
         except Exception as e:
             logger.error(f"清理错误应用实例失败: {e}")
             return {"success": False, "message": f"清理失败: {e}"}
-   
+
     async def find_apps_by_host_path(self, session: AsyncSession, host_path: str) -> List[Dict[str, Any]]:
         """根据本地路径查找所有映射该路径的应用及卷信息"""
         try:
