@@ -80,10 +80,10 @@ class AppBase(SQLModel):
         sa_column=Column(JSON), default={}, description="环境变量"
     )
     volumes: Optional[List[AppVolume]] = Field(
-        sa_column=Column(pydantic_column_type(AppVolume)), default=[], description="卷映射"
+        sa_column=Column(JSON), default=[], description="卷映射"
     )
     urls: Optional[List[AppURL]] = Field(
-        sa_column=Column(pydantic_column_type(AppURL)), default=[], description="URL配置"
+        sa_column=Column(JSON), default=[], description="URL配置"
     )
     
     # 资源限制
@@ -100,6 +100,9 @@ class AppBase(SQLModel):
     # 状态
     is_active: bool = Field(default=True, description="是否激活")
     is_preset: bool = Field(default=False, description="是否预设应用")
+    
+    # 状态字段
+    status: AppStatusEnum = Field(default=AppStatusEnum.STOPPED, description="应用状态")
     
     # 构建相关字段
     build_status: Optional[str] = Field(default=None, description="构建状态")

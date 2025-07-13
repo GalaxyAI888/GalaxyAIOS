@@ -33,8 +33,8 @@ async def create_app(
 @router.get("/", response_model=List[AppPublic], summary="列出应用")
 async def list_apps(
     session: SessionDep,
-    skip: int = Query(0, ge=0, description="跳过记录数"),
-    limit: int = Query(100, ge=1, le=1000, description="返回记录数"),
+    page: int = Query(1, ge=1, description="页码，从1开始"),
+    per_page: int = Query(100, ge=1, le=1000, description="每页记录数"),
     category: Optional[str] = Query(None, description="应用分类"),
     is_active: Optional[bool] = Query(None, description="是否激活")
 ):
@@ -42,7 +42,7 @@ async def list_apps(
     try:
         app_service = AppService()
         apps = await app_service.list_apps(
-            session, skip=skip, limit=limit, 
+            session, page=page, per_page=per_page, 
             category=category, is_active=is_active
         )
         return apps
@@ -90,12 +90,14 @@ async def update_app(
 @router.delete("/{app_id}", summary="删除应用")
 async def delete_app(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    cleanup_resources: bool = Query(False, description="是否同时清理Docker镜像等资源"),
+    cleanup_files: bool = Query(False, description="是否同时清理映射的文件目录")
 ):
     """删除应用"""
     try:
         app_service = AppService()
-        success = await app_service.delete_app(session, app_id)
+        success = await app_service.delete_app(session, app_id, cleanup_resources, cleanup_files)
         if not success:
             raise HTTPException(status_code=404, detail="应用不存在")
         return {"message": "应用删除成功"}
@@ -107,12 +109,12 @@ async def delete_app(
         raise HTTPException(status_code=500, detail=f"删除应用失败: {e}")
 
 
-@router.post("/{app_id}/build", summary="获取应用镜像")
+@router.post("/{app_id}/build", summary="构建应用镜像")
 async def build_app_image(
     app_id: int,
     session: SessionDep
 ):
-    """获取应用Docker镜像（构建或拉取）"""
+    """构建应用Docker镜像"""
     try:
         app_service = AppService()
         result = await app_service.start_build_image(session, app_id)
@@ -141,6 +143,24 @@ async def pull_app_image(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"拉取镜像失败: {e}")
+
+
+@router.post("/{app_id}/image", summary="获取应用镜像（自动判断build或pull）")
+async def acquire_app_image(
+    app_id: int,
+    session: SessionDep
+):
+    """获取应用Docker镜像（自动判断构建或拉取）"""
+    try:
+        app_service = AppService()
+        result = await app_service.start_image_acquisition(session, app_id)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取镜像失败: {e}")
 
 
 @router.post("/{app_id}/start", summary="启动应用")
@@ -245,6 +265,24 @@ async def cleanup_app_instances(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"清理应用实例失败: {e}")
+
+
+@router.post("/{app_id}/cleanup-errors", summary="清理错误的应用实例")
+async def cleanup_error_instances(
+    app_id: int,
+    session: SessionDep
+):
+    """清理应用的错误实例和容器"""
+    try:
+        app_service = AppService()
+        result = await app_service.cleanup_error_instances(session, app_id)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理错误应用实例失败: {e}")
 
 
 # Docker相关操作

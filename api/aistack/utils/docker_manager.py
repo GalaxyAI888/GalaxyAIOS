@@ -172,12 +172,31 @@ class DockerManager:
             if volumes:
                 volume_mounts = {}
                 for volume in volumes:
-                    # 确保主机目录存在
-                    os.makedirs(volume.host_path, exist_ok=True)
-                    volume_mounts[volume.host_path] = {
-                        'bind': volume.container_path,
-                        'mode': 'ro' if volume.read_only else 'rw'
-                    }
+                    # 处理卷映射，支持字典和对象两种格式
+                    if isinstance(volume, dict):
+                        host_path = volume.get('host_path')
+                        container_path = volume.get('container_path')
+                        read_only = volume.get('read_only', False)
+                    else:
+                        # 如果是 AppVolume 对象
+                        host_path = volume.host_path
+                        container_path = volume.container_path
+                        read_only = volume.read_only
+                    
+                    if host_path and container_path:
+                        # 智能处理路径：如果是相对路径，转换为绝对路径
+                        import os
+                        if not os.path.isabs(host_path):
+                            # 相对路径，转换为绝对路径
+                            host_path = os.path.abspath(host_path)
+                            logger.info(f"相对路径转换为绝对路径: {host_path}")
+                        
+                        # 确保主机目录存在
+                        os.makedirs(host_path, exist_ok=True)
+                        volume_mounts[host_path] = {
+                            'bind': container_path,
+                            'mode': 'ro' if read_only else 'rw'
+                        }
                 container_config['volumes'] = volume_mounts
             
             # 添加资源限制
