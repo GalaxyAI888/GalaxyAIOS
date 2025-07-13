@@ -97,12 +97,10 @@ async def delete_app(
     """删除应用"""
     try:
         app_service = AppService()
-        success = await app_service.delete_app(session, app_id, cleanup_resources, cleanup_files)
-        if not success:
-            raise HTTPException(status_code=404, detail="应用不存在")
-        return {"message": "应用删除成功"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        result = await app_service.delete_app(session, app_id, cleanup_resources, cleanup_files)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
     except HTTPException:
         raise
     except Exception as e:

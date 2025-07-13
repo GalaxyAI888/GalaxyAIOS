@@ -282,6 +282,18 @@ class DockerManager:
             container = self.client.containers.get(container_id)
             container_info = container.attrs
             
+            # 处理端口信息，将Docker的复杂格式转换为简单的字符串映射
+            raw_ports = container_info['NetworkSettings']['Ports']
+            processed_ports = {}
+            if raw_ports:
+                for container_port, host_bindings in raw_ports.items():
+                    if host_bindings:
+                        # 取第一个主机绑定
+                        host_binding = host_bindings[0]
+                        processed_ports[container_port] = f"{host_binding['HostIp']}:{host_binding['HostPort']}"
+                    else:
+                        processed_ports[container_port] = ""
+            
             status_info = {
                 'status': container_info['State']['Status'],
                 'running': container_info['State']['Running'],
@@ -290,7 +302,7 @@ class DockerManager:
                 'error': container_info['State'].get('Error', ''),
                 'exit_code': container_info['State'].get('ExitCode'),
                 'ip_address': container_info['NetworkSettings']['IPAddress'],
-                'ports': container_info['NetworkSettings']['Ports']
+                'ports': processed_ports
             }
             
             return True, "获取状态成功", status_info
@@ -357,13 +369,25 @@ class DockerManager:
             container_list = []
             
             for container in containers:
+                # 处理端口信息，将Docker的复杂格式转换为简单的字符串映射
+                raw_ports = container.attrs['NetworkSettings']['Ports']
+                processed_ports = {}
+                if raw_ports:
+                    for container_port, host_bindings in raw_ports.items():
+                        if host_bindings:
+                            # 取第一个主机绑定
+                            host_binding = host_bindings[0]
+                            processed_ports[container_port] = f"{host_binding['HostIp']}:{host_binding['HostPort']}"
+                        else:
+                            processed_ports[container_port] = ""
+                
                 container_info = {
                     'id': container.id,
                     'name': container.name,
                     'status': container.status,
                     'image': container.image.tags[0] if container.image.tags else container.image.id,
                     'created': container.attrs['Created'],
-                    'ports': container.attrs['NetworkSettings']['Ports']
+                    'ports': processed_ports
                 }
                 container_list.append(container_info)
             

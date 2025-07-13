@@ -205,7 +205,7 @@ class AppService:
             logger.error(f"更新应用失败: {e}")
             raise
    
-    async def delete_app(self, session: AsyncSession, app_id: int, cleanup_resources: bool = False, cleanup_files: bool = False) -> bool:
+    async def delete_app(self, session: AsyncSession, app_id: int, cleanup_resources: bool = False, cleanup_files: bool = False) -> Dict[str, Any]:
         """删除应用"""
         try:
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
@@ -215,7 +215,7 @@ class AppService:
                 async with new_session.begin():
                     app = await new_session.get(App, app_id)
                     if not app:
-                        return False
+                        return {"success": False, "message": "应用不存在"}
                    
                     # 检查是否有运行中的实例
                     result = await new_session.exec(
@@ -227,7 +227,7 @@ class AppService:
                     running_instances = result.all()
                    
                     if running_instances:
-                        raise ValueError(f"应用 {app.name} 有运行中的实例，无法删除")
+                        return {"success": False, "message": f"应用 {app.name} 有运行中的实例，无法删除"}
                    
                     # 删除所有相关的实例记录
                     all_instances = await new_session.exec(
@@ -278,11 +278,11 @@ class AppService:
                     # 事务会自动提交
            
             logger.info(f"应用删除成功: {app.name}")
-            return True
+            return {"success": True, "message": f"应用 {app.name} 删除成功"}
            
         except Exception as e:
             logger.error(f"删除应用失败: {e}")
-            raise
+            return {"success": False, "message": f"删除应用失败: {e}"}
    
     async def start_build_image(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
         """启动镜像构建（异步）"""
@@ -345,16 +345,16 @@ class AppService:
                     if not app:
                         logger.error(f"应用不存在: {app_id}")
                         return
-           
-            # 保存应用信息，因为session会在async with块结束后关闭
-            app_info = {
-                'image_source': app.image_source,
-                'dockerfile_path': app.dockerfile_path,
-                'image_name': app.image_name,
-                'image_tag': app.image_tag,
-                'image_url': app.image_url,
-                'name': app.name
-            }
+                    
+                    # 保存应用信息，因为session会在async with块结束后关闭
+                    app_info = {
+                        'image_source': app.image_source,
+                        'dockerfile_path': app.dockerfile_path,
+                        'image_name': app.image_name,
+                        'image_tag': app.image_tag,
+                        'image_url': app.image_url,
+                        'name': app.name
+                    }
            
             if app_info['image_source'] == ImageSourceEnum.BUILD:
                 if not app_info['dockerfile_path']:
@@ -612,23 +612,20 @@ class AppService:
                 image_tag=app_info['image_tag']
             )
            
-            # 更新拉取结果
+            # 创建新的会话来更新状态
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
-                async with new_session.begin():
-                    app = await new_session.get(App, app_id)
-                    app.build_finished_at = datetime.utcnow()
-                   
-                    if success:
-                        app.status = AppStatusEnum.STOPPED
-                        app.build_status = "success"
-                        app.build_message = message
-                        logger.info(f"应用 {app_info['name']} 镜像拉取成功")
-                    else:
-                        app.status = AppStatusEnum.BUILD_FAILED
-                        app.build_status = "failed"
-                        app.build_message = message
-                        logger.error(f"应用 {app_info['name']} 镜像拉取失败: {message}")
+                await self._update_build_status(
+                    new_session, app_id,
+                    AppStatusEnum.STOPPED if success else AppStatusEnum.BUILD_FAILED,
+                    "success" if success else "failed",
+                    message
+                )
+           
+            if success:
+                logger.info(f"应用 {app_info['name']} 镜像拉取成功")
+            else:
+                logger.error(f"应用 {app_info['name']} 镜像拉取失败: {message}")
            
         except Exception as e:
             logger.error(f"异步拉取镜像过程中发生异常: {e}")
@@ -636,13 +633,12 @@ class AppService:
                 # 创建新的数据库会话来处理异常
                 engine = get_engine()
                 async with AsyncSession(engine) as new_session:
-                    async with new_session.begin():
-                        app = await new_session.get(App, app_id)
-                        if app:
-                            app.status = AppStatusEnum.BUILD_FAILED
-                            app.build_status = "failed"
-                            app.build_message = f"拉取镜像异常: {str(e)}"
-                            app.build_finished_at = datetime.utcnow()
+                    await self._update_build_status(
+                        new_session, app_id,
+                        AppStatusEnum.BUILD_FAILED,
+                        "failed",
+                        f"拉取镜像异常: {str(e)}"
+                    )
             except Exception as update_error:
                 logger.error(f"更新拉取状态失败: {update_error}")
    
