@@ -1034,6 +1034,11 @@ class AppService:
                         # 更新实例统计信息
                         instance.memory_usage = stats_info['memory_usage']
                         instance.cpu_usage = stats_info['cpu_usage']
+                        # 添加GPU信息
+                        if 'gpu' in stats_info:
+                            instance.gpu_info = stats_info['gpu']
+                        else:
+                            instance.gpu_info = []
                         # 事务会自动提交
                    
             return {
@@ -1087,6 +1092,11 @@ class AppService:
                                 # 更新实例统计信息
                                 instance.memory_usage = stats_info['memory_usage']
                                 instance.cpu_usage = stats_info['cpu_usage']
+                                # 添加GPU信息
+                                if 'gpu' in stats_info:
+                                    instance.gpu_info = stats_info['gpu']
+                                else:
+                                    instance.gpu_info = []
                         
                         # 手动构建 AppInstancePublic 对象
                         instance_data = {
@@ -1099,6 +1109,7 @@ class AppService:
                             "stopped_at": instance.stopped_at,
                             "memory_usage": instance.memory_usage,
                             "cpu_usage": instance.cpu_usage,
+                            "gpu_info": instance.gpu_info,
                             "ip_address": instance.ip_address,
                             "exposed_ports": instance.exposed_ports,
                             "created_at": instance.created_at,

@@ -180,6 +180,11 @@ class AppInstanceBase(SQLModel):
     memory_usage: Optional[str] = Field(default=None, description="内存使用")
     cpu_usage: Optional[float] = Field(default=None, description="CPU使用率")
     
+    # GPU使用情况
+    gpu_info: Optional[List[Dict[str, Any]]] = Field(
+        sa_column=Column(JSON), default=[], description="GPU使用信息"
+    )
+    
     # 网络信息
     ip_address: Optional[str] = Field(default=None, description="容器IP地址")
     exposed_ports: Optional[Dict[str, str]] = Field(
@@ -210,6 +215,7 @@ class AppInstanceUpdate(BaseModel):
     stopped_at: Optional[datetime] = None
     memory_usage: Optional[str] = None
     cpu_usage: Optional[float] = None
+    gpu_info: Optional[List[Dict[str, Any]]] = None
     ip_address: Optional[str] = None
     exposed_ports: Optional[Dict[str, str]] = None
 

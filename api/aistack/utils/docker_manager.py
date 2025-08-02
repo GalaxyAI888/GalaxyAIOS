@@ -5,6 +5,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from aistack.schemas.apps import AppStatusEnum, AppVolume, AppURL
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -431,7 +432,7 @@ class DockerManager:
     
     def get_container_stats(self, container_id: str) -> Tuple[bool, str, Optional[Dict]]:
         """
-        获取容器资源使用统计
+        获取容器资源使用统计（包括GPU，如果有NVIDIA GPU）
         
         Args:
             container_id: 容器ID
@@ -459,6 +460,75 @@ class DockerManager:
                 'memory_limit': f"{memory_limit / (1024*1024):.1f}MB",
                 'memory_percent': round(memory_percent, 2)
             }
+            
+            # 检查是否有NVIDIA GPU
+            def has_nvidia_gpu():
+                try:
+                    result = subprocess.run(['nvidia-smi', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    return result.returncode == 0 and b'GPU' in result.stdout
+                except Exception:
+                    return False
+            
+            if has_nvidia_gpu():
+                # 获取容器主进程PID
+                pid = container.attrs['State'].get('Pid')
+                if pid and pid > 0:
+                    try:
+                        # 获取GPU总显存信息
+                        gpu_info_out = subprocess.check_output(['nvidia-smi', '--query-gpu=uuid,memory.total,memory.used,utilization.gpu,name', '--format=csv,noheader,nounits'])
+                        gpu_info_lines = gpu_info_out.decode().strip().split('\n')
+                        gpu_total_info = {}
+                        for line in gpu_info_lines:
+                            parts = [x.strip() for x in line.split(',')]
+                            if len(parts) == 5:
+                                gpu_uuid = parts[0]
+                                total_memory = int(parts[1])
+                                used_memory = int(parts[2])
+                                gpu_utilization = int(parts[3])
+                                gpu_name = parts[4]
+                                gpu_total_info[gpu_uuid] = {
+                                    'total_memory_MB': total_memory,
+                                    'used_memory_MB': used_memory,
+                                    'gpu_utilization_percent': gpu_utilization,
+                                    'gpu_name': gpu_name
+                                }
+                        
+                        # 获取容器进程的GPU使用情况
+                        smi_out = subprocess.check_output(['nvidia-smi', '--query-compute-apps=pid,used_memory,gpu_uuid', '--format=csv,noheader,nounits'])
+                        smi_lines = smi_out.decode().strip().split('\n')
+                        gpu_stats = []
+                        for line in smi_lines:
+                            parts = [x.strip() for x in line.split(',')]
+                            if len(parts) == 3 and str(pid) == parts[0]:
+                                gpu_uuid = parts[2]
+                                container_used_memory = int(parts[1])
+                                
+                                # 获取该GPU的总信息
+                                gpu_total = gpu_total_info.get(gpu_uuid, {})
+                                total_memory = gpu_total.get('total_memory_MB', 0)
+                                gpu_utilization = gpu_total.get('gpu_utilization_percent', 0)
+                                gpu_name = gpu_total.get('gpu_name', 'Unknown')
+                                
+                                # 计算显存占用百分比
+                                memory_percent = (container_used_memory / total_memory * 100) if total_memory > 0 else 0
+                                
+                                gpu_stats.append({
+                                    'gpu_uuid': gpu_uuid,
+                                    'gpu_name': gpu_name,
+                                    'used_memory_MB': container_used_memory,
+                                    'total_memory_MB': total_memory,
+                                    'memory_percent': round(memory_percent, 2),
+                                    'gpu_utilization_percent': gpu_utilization
+                                })
+                        
+                        if gpu_stats:
+                            stats_info['gpu'] = gpu_stats
+                        else:
+                            stats_info['gpu'] = []
+                    except Exception as e:
+                        stats_info['gpu'] = f"获取GPU信息失败: {e}"
+                else:
+                    stats_info['gpu'] = '未获取到容器主进程PID，无法检测GPU占用'
             
             return True, "获取统计信息成功", stats_info
             
