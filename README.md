@@ -53,6 +53,19 @@
 2. 在浏览器中打开 `http://127.0.0.1:12888`，使用"admin/admin"登录
 
 
+```
+使用方法：
+进入docker目录：cd GalaxyAIOS/docker
+启动系统：./start.sh
+停止系统：./stop.sh
+系统启动后：
+Web界面：http://localhost:12888
+API接口：http://localhost:9999
+默认用户名：admin
+默认密码：admin
+```
+
+
 ## 平台支持
 
 - [x] Linux
