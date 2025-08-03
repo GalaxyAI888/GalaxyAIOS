@@ -963,10 +963,14 @@ class AppService:
                         if app.status != AppStatusEnum.STOPPED:
                             app.status = AppStatusEnum.STOPPED
                         
+                        # 提取数据，避免在session外访问
+                        app_name = app.name
+                        app_status = app.status
+                        
                         return {
                             "success": True,
-                            "app_name": app.name,
-                            "status": app.status,
+                            "app_name": app_name,
+                            "status": app_status,
                             "message": "无运行实例",
                             "container_id": None,
                             "started_at": None,
@@ -989,17 +993,27 @@ class AppService:
                             app.status = new_instance_status
                             
                             # 事务会自动提交
+                    
+                    # 提取数据，避免在session外访问
+                    app_name = app.name
+                    instance_status = instance.status
+                    instance_status_message = instance.status_message
+                    container_id = instance.container_id
+                    started_at = instance.started_at
+                    stopped_at = instance.stopped_at
+                    ip_address = instance.ip_address
+                    exposed_ports = instance.exposed_ports
            
             return {
                 "success": True,
-                "app_name": app.name,
-                "status": instance.status,
-                "message": instance.status_message,
-                "container_id": instance.container_id,
-                "started_at": instance.started_at,
-                "stopped_at": instance.stopped_at,
-                "ip_address": instance.ip_address,
-                "exposed_ports": instance.exposed_ports
+                "app_name": app_name,
+                "status": instance_status,
+                "message": instance_status_message,
+                "container_id": container_id,
+                "started_at": started_at,
+                "stopped_at": stopped_at,
+                "ip_address": ip_address,
+                "exposed_ports": exposed_ports
             }
        
         except Exception as e:
