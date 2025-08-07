@@ -3,6 +3,8 @@ import os
 import platform
 import logging
 import threading
+import re
+import subprocess
 
 from aistack.utils.command import is_command_available
 from aistack.schemas.workers import VendorEnum
@@ -82,6 +84,7 @@ class DeviceTypeEnum(str, Enum):
     MPS = "mps"
     ROCM = "rocm"
     MUSA = "musa"
+    DCU = "dcu"  
 
 
 def device() -> str:
@@ -94,30 +97,61 @@ def device() -> str:
     - rocm
     - etc.
     """
-    if (
-        is_command_available("nvidia-smi")
-        or os.path.exists("/usr/local/cuda")
-        or os.path.exists("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA")
-    ):
+    logger.info("Starting device type detection...")
+    
+    # Check CUDA
+    nvidia_smi_available = is_command_available("nvidia-smi")
+    cuda_path_linux = os.path.exists("/usr/local/cuda")
+    cuda_path_windows = os.path.exists("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA")
+    
+    logger.info(f"CUDA detection: nvidia-smi={nvidia_smi_available}, cuda_path_linux={cuda_path_linux}, cuda_path_windows={cuda_path_windows}")
+    
+    if nvidia_smi_available or cuda_path_linux or cuda_path_windows:
+        logger.info("CUDA device detected")
         return DeviceTypeEnum.CUDA.value
 
-    if (
-        is_command_available("mthreads-gmi")
-        or os.path.exists("/usr/local/musa")
-        or os.path.exists("/opt/musa")
-    ):
+    # Check MUSA
+    mthreads_gmi_available = is_command_available("mthreads-gmi")
+    musa_path_linux = os.path.exists("/usr/local/musa")
+    musa_path_opt = os.path.exists("/opt/musa")
+    
+    logger.info(f"MUSA detection: mthreads-gmi={mthreads_gmi_available}, musa_path_linux={musa_path_linux}, musa_path_opt={musa_path_opt}")
+    
+    if mthreads_gmi_available or musa_path_linux or musa_path_opt:
+        logger.info("MUSA device detected")
         return DeviceTypeEnum.MUSA.value
 
-    if is_command_available("npu-smi"):
+    # Check NPU
+    npu_smi_available = is_command_available("npu-smi")
+    logger.info(f"NPU detection: npu-smi={npu_smi_available}")
+    if npu_smi_available:
+        logger.info("NPU device detected")
         return "npu"
+    
+    # Check DCU
+    hy_smi_available = is_command_available("hy-smi")
+    logger.info(f"DCU detection: hy-smi={hy_smi_available}")
+    if hy_smi_available:
+        logger.info("DCU device detected")
+        return "dcu"  
 
-    if system() == "darwin" and arch() == "arm64":
+    # Check MPS (Apple Silicon)
+    current_system = system()
+    current_arch = arch()
+    logger.info(f"MPS detection: system={current_system}, arch={current_arch}")
+    if current_system == "darwin" and current_arch == "arm64":
+        logger.info("MPS device detected")
         return DeviceTypeEnum.MPS.value
 
-    if is_command_available("rocm-smi") or os.path.exists(
-        "C:\\Program Files\\AMD\\ROCm"
-    ):
+    # Check ROCm
+    rocm_smi_available = is_command_available("rocm-smi")
+    rocm_path_windows = os.path.exists("C:\\Program Files\\AMD\\ROCm")
+    logger.info(f"ROCM detection: rocm-smi={rocm_smi_available}, rocm_path_windows={rocm_path_windows}")
+    if rocm_smi_available or rocm_path_windows:
+        logger.info("ROCM device detected")
         return DeviceTypeEnum.ROCM.value
+    
+    logger.warning("No GPU device type detected")
     return ""
 
 
@@ -127,7 +161,66 @@ def device_type_from_vendor(vendor: VendorEnum) -> str:
         VendorEnum.Huawei.value: DeviceTypeEnum.NPU.value,
         VendorEnum.Apple.value: DeviceTypeEnum.MPS.value,
         VendorEnum.AMD.value: DeviceTypeEnum.ROCM.value,
+        VendorEnum.Hygon.value: DeviceTypeEnum.DCU.value,  
         VendorEnum.MTHREADS.value: DeviceTypeEnum.MUSA.value,
     }
 
     return mapping.get(vendor, "")
+# 在现有platform.py文件末尾添加以下函数
+
+def get_cuda_version() -> str:
+    """
+    Returns the CUDA toolkit version installed on the system.
+    """
+    if os.environ.get("CUDA_VERSION"):
+        return os.environ["CUDA_VERSION"]
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.version.cuda
+    except ImportError:
+        pass
+
+    if is_command_available("nvcc"):
+        try:
+            output = subprocess.check_output(["nvcc", "--version"], encoding="utf-8")
+            match = re.search(r"release (\d+\.\d+),", output)
+            if match:
+                return match.group(1)
+        except Exception as e:
+            logger.error(f"Error running nvcc: {e}")
+    return ""
+
+def get_cann_version() -> str:
+    """
+    Returns the CANN version installed on the system.
+    """
+    env_cann_version = os.getenv("CANN_VERSION", "")
+    if env_cann_version:
+        return env_cann_version
+
+    try:
+        import torch  
+        import torch_npu  
+        from torch_npu.utils.collect_env import (
+            get_cann_version as get_cann_version_from_env,
+        )
+        from torch_npu.npu.utils import get_cann_version
+
+        cann_version = get_cann_version_from_env()
+        if cann_version:
+            return cann_version.lower()
+        cann_version = get_cann_version()
+        if cann_version:
+            return cann_version.lower()
+    except ImportError:
+        pass
+
+    return ""
+
+def get_cann_chip() -> str:
+    """
+    Returns the CANN chip version installed on the system.
+    """
+    return os.getenv("CANN_CHIP", "")

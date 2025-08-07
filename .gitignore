@@ -58,6 +58,7 @@ api/log/
 # Logs
 *.log
 logs/
+web/
 
 # Environment variables
 .env
