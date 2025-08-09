@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from aistack.schemas.apps import AppStatusEnum, AppVolume, AppURL
 import subprocess
+import shlex
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,8 @@ class DockerManager:
     def start_container(self, app_name: str, image_name: str, image_tag: str = "latest",
                        container_name: Optional[str] = None, ports: Optional[Dict[str, str]] = None,
                        environment: Optional[Dict[str, str]] = None, volumes: Optional[List[AppVolume]] = None,
-                       memory_limit: Optional[str] = None, cpu_limit: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+                       memory_limit: Optional[str] = None, cpu_limit: Optional[str] = None,
+                       gpu_devices: Optional[List[int]] = None, device_type: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
         """
         启动Docker容器
         
@@ -255,6 +257,8 @@ class DockerManager:
             volumes: 卷映射
             memory_limit: 内存限制
             cpu_limit: CPU限制
+            gpu_devices: GPU设备索引列表，如[0, 1]表示使用第0和第1个设备
+            device_type: 设备类型（例如 "cuda"|"rocm"|"dcu"|"npu"|"musa"），默认自动探测
             
         Returns:
             (成功标志, 消息, 容器ID)
@@ -282,7 +286,9 @@ class DockerManager:
             
             # 添加环境变量
             if environment:
-                container_config['environment'] = environment
+                container_config['environment'] = dict(environment)
+            else:
+                container_config['environment'] = {}
             
             # 添加卷映射
             if volumes:
@@ -321,6 +327,90 @@ class DockerManager:
                 container_config['cpu_quota'] = int(float(cpu_limit) * 100000) if cpu_limit else None
                 container_config['cpu_period'] = 100000
             
+            # 添加GPU/NPU等设备配置
+            if gpu_devices:
+                # 归一化类型（应由上层基于采集数据推断并传入；此处不再做仅CUDA的特例推断）
+                dtype = (device_type or "").lower().strip() if device_type else None
+
+                gpu_device_str = ",".join(map(str, gpu_devices))
+
+                # CUDA / NVIDIA
+                if dtype == "cuda":
+                    try:
+                        container_config['device_requests'] = [
+                            docker.types.DeviceRequest(
+                                count=-1,
+                                capabilities=[["gpu"]],
+                                options={"device": gpu_device_str}
+                            )
+                        ]
+                        # 兼容环境变量
+                        env_map = container_config['environment']
+                        env_map.setdefault("NVIDIA_VISIBLE_DEVICES", gpu_device_str)
+                        env_map.setdefault("NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
+                        logger.info(f"配置CUDA设备: {gpu_device_str}")
+                    except Exception as e:
+                        logger.warning(f"配置CUDA设备失败: {e}")
+
+                # AMD ROCm / DCU（简化处理：挂载kfd和dri，并使用HIP_VISIBLE_DEVICES）
+                elif dtype in ("rocm", "dcu"):
+                    try:
+                        devices = container_config.get('devices', [])
+                        # 常见设备节点（存在才挂载）
+                        for dev in ["/dev/kfd", "/dev/dri"]:
+                            if os.path.exists(dev):
+                                devices.append(f"{dev}:{dev}:")
+                        if devices:
+                            container_config['devices'] = devices
+                        # 某些平台需要加入video组
+                        try:
+                            if os.name == 'posix':
+                                group_add = container_config.get('group_add', [])
+                                group_add.append('video')
+                                container_config['group_add'] = group_add
+                        except Exception:
+                            pass
+                        # 通过环境变量控制可见设备
+                        env_map = container_config['environment']
+                        env_map.setdefault("HIP_VISIBLE_DEVICES", gpu_device_str)
+                        # 兼容变量
+                        env_map.setdefault("ROCR_VISIBLE_DEVICES", gpu_device_str)
+                        logger.info(f"配置ROCm/DCU设备: {gpu_device_str}")
+                    except Exception as e:
+                        logger.warning(f"配置ROCm/DCU设备失败: {e}")
+
+                # 华为 NPU（Ascend），仅设置可见设备的环境变量，设备节点挂载因发行版差异较大，这里不强制
+                elif dtype == "npu":
+                    try:
+                        env_map = container_config['environment']
+                        env_map.setdefault("ASCEND_VISIBLE_DEVICES", gpu_device_str)
+                        logger.info(f"配置NPU设备: {gpu_device_str}")
+                    except Exception as e:
+                        logger.warning(f"配置NPU设备失败: {e}")
+
+                # MUSA（Moore Threads），以环境变量约定方式暴露
+                elif dtype == "musa":
+                    try:
+                        env_map = container_config['environment']
+                        # 常见可见设备变量命名，具体以镜像内运行时为准
+                        env_map.setdefault("MUSA_VISIBLE_DEVICES", gpu_device_str)
+                        env_map.setdefault("MTHREADS_VISIBLE_DEVICES", gpu_device_str)
+                        logger.info(f"配置MUSA设备: {gpu_device_str}")
+                    except Exception as e:
+                        logger.warning(f"配置MUSA设备失败: {e}")
+
+                elif dtype is None:
+                    logger.warning("未提供或未推断到 device_type，跳过设备分配（容器将不挂载加速设备）")
+                else:
+                    logger.warning(f"未识别的设备类型: {device_type}，跳过设备分配")
+
+            # 输出等效 docker run 命令，便于排查
+            try:
+                equivalent_cmd = self._build_equivalent_docker_run_cmd(container_config)
+                logger.info(f"等效 docker run 命令: {equivalent_cmd}")
+            except Exception as e:
+                logger.debug(f"生成等效 docker run 命令失败: {e}")
+            
             # 启动容器
             container = self.client.containers.run(**container_config)
             
@@ -332,6 +422,94 @@ class DockerManager:
             logger.error(error_msg)
             return False, error_msg, None
     
+    def _build_equivalent_docker_run_cmd(self, container_config: Dict) -> str:
+        """根据 container_config 构建用于日志展示的等效 docker run 命令字符串。"""
+        parts: List[str] = ["docker", "run", "-d"]
+
+        # restart policy
+        rp = container_config.get('restart_policy') or {}
+        if isinstance(rp, dict):
+            name = rp.get('Name')
+            if name:
+                parts += ["--restart", name]
+
+        # name
+        if container_config.get('name'):
+            parts += ["--name", shlex.quote(container_config['name'])]
+
+        # ports
+        ports = container_config.get('ports') or {}
+        if isinstance(ports, dict):
+            for container_port, host_map in ports.items():
+                try:
+                    # container_port 形如 "80/tcp" 或 80
+                    cport = str(container_port).split('/')[0]
+                    host_port = None
+                    if isinstance(host_map, str):
+                        # 形如 "0.0.0.0:8080" 或 "8080"
+                        host_port = host_map.split(':')[-1]
+                    elif isinstance(host_map, list) and host_map:
+                        # 取第一个映射
+                        item = host_map[0]
+                        if isinstance(item, dict):
+                            host_port = item.get('HostPort') or item.get('host_port')
+                        else:
+                            host_port = str(item).split(':')[-1]
+                    elif isinstance(host_map, dict):
+                        host_port = host_map.get('HostPort') or host_map.get('host_port')
+                    if host_port:
+                        parts += ["-p", f"{host_port}:{cport}"]
+                except Exception:
+                    continue
+
+        # volumes
+        volumes = container_config.get('volumes') or {}
+        if isinstance(volumes, dict):
+            for host_path, spec in volumes.items():
+                try:
+                    bind = spec.get('bind')
+                    mode = spec.get('mode', 'rw')
+                    if bind:
+                        parts += ["-v", f"{host_path}:{bind}:{mode}"]
+                except Exception:
+                    continue
+
+        # devices (ROCm/DCU)
+        devices = container_config.get('devices') or []
+        for dev in devices:
+            parts += ["--device", dev]
+
+        # group_add
+        group_add = container_config.get('group_add') or []
+        for grp in group_add:
+            parts += ["--group-add", str(grp)]
+
+        # environment
+        envs = container_config.get('environment') or {}
+        if isinstance(envs, dict):
+            for k, v in envs.items():
+                parts += ["-e", f"{k}={shlex.quote(str(v))}"]
+
+        # CUDA --gpus (当存在 device_requests 且配置了 options.device)
+        dreqs = container_config.get('device_requests') or []
+        if dreqs:
+            try:
+                # docker-py DeviceRequest 无法直接序列化，这里仅支持常见 CUDA 的 options.device
+                for dr in dreqs:
+                    opts = getattr(dr, 'options', None) or {}
+                    device = opts.get('device')
+                    if device:
+                        parts += ["--gpus", f"\"device={device}\""]
+                        break
+            except Exception:
+                pass
+
+        # image
+        image = container_config.get('image') or ''
+        parts.append(shlex.quote(image))
+
+        return " ".join(parts)
+
     def stop_container(self, container_id: str) -> Tuple[bool, str]:
         """
         停止Docker容器
@@ -463,11 +641,7 @@ class DockerManager:
             
             # 检查是否有NVIDIA GPU
             def has_nvidia_gpu():
-                try:
-                    result = subprocess.run(['nvidia-smi', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    return result.returncode == 0 and b'GPU' in result.stdout
-                except Exception:
-                    return False
+                return self._has_nvidia_gpu()
             
             if has_nvidia_gpu():
                 # 获取容器主进程PID
@@ -538,6 +712,14 @@ class DockerManager:
             error_msg = f"获取容器统计信息失败: {e}"
             logger.error(error_msg)
             return False, error_msg, None
+    
+    def _has_nvidia_gpu(self) -> bool:
+        """检查是否有NVIDIA GPU"""
+        try:
+            result = subprocess.run(['nvidia-smi', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return result.returncode == 0 and b'GPU' in result.stdout
+        except Exception:
+            return False
     
     def list_containers(self, filters: Optional[Dict] = None) -> List[Dict]:
         """

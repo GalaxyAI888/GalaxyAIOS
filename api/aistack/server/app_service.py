@@ -813,7 +813,7 @@ class AppService:
             logger.error(f"获取镜像信息失败: {e}")
             return {"success": False, "message": f"获取镜像信息失败: {e}"}
 
-    async def start_app(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def start_app(self, session: AsyncSession, app_id: int, gpu_devices: Optional[List[int]] = None, device_type: Optional[str] = None) -> Dict[str, Any]:
         """启动应用"""
         try:
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
@@ -834,6 +834,39 @@ class AppService:
                     if existing_instance:
                         return {"success": False, "message": "应用已有实例，请先停止现有实例"}
                    
+                    # 验证GPU设备选择，并在未提供 device_type 时自动推断类型
+                    inferred_device_type = (device_type.lower() if device_type else None)
+                    if device_type:
+                        logger.info(f"启动请求指定了 device_type: {device_type}")
+                    if gpu_devices:
+                        logger.info(f"启动请求指定了 gpu_devices: {gpu_devices}")
+                        from aistack.server.gpu_service import GPUService
+                        gpu_service = GPUService()
+                        available_gpus = gpu_service.get_available_gpu_indices()
+                        
+                        for gpu_index in gpu_devices:
+                            if gpu_index not in available_gpus:
+                                return {"success": False, "message": f"GPU {gpu_index} 不可用或已被占用"}
+
+                        # 自动推断类型（基于采集到的GPU列表 index->type）
+                        if not inferred_device_type:
+                            gpus_detail = gpu_service.get_available_gpus()
+                            idx_to_type = {g['index']: (g.get('type') or '').lower() for g in gpus_detail}
+                            types_selected = {idx_to_type.get(idx, '') for idx in gpu_devices}
+                            types_selected.discard('')
+                            if len(types_selected) == 1:
+                                inferred_device_type = types_selected.pop()
+                                logger.info(f"根据 gpu_devices {gpu_devices} 推断出 device_type={inferred_device_type}")
+                            elif len(types_selected) == 0:
+                                # 无法识别类型，保持为 None，让下层走默认检测（NVIDIA 场景仍可工作）
+                                inferred_device_type = None
+                                logger.info("未能从所选 gpu_devices 推断出设备类型，将不分配加速设备（CPU 启动）")
+                            else:
+                                logger.warning(f"所选 GPU 跨多种类型: {list(types_selected)}")
+                                return {"success": False, "message": f"所选 GPU 跨多种类型: {list(types_selected)}，请分开启动或显式指定 device_type"}
+                    else:
+                        logger.info("未提供 gpu_devices，将按无加速设备启动（CPU）")
+                    
                     # 启动容器
                     success, message, container_id = self.docker_manager.start_container(
                         app_name=app.name,
@@ -844,7 +877,9 @@ class AppService:
                         environment=app.environment,
                         volumes=app.volumes,
                         memory_limit=app.memory_limit,
-                        cpu_limit=app.cpu_limit
+                        cpu_limit=app.cpu_limit,
+                        gpu_devices=gpu_devices,
+                        device_type=inferred_device_type
                     )
                    
                     # 只有容器启动成功才创建实例记录

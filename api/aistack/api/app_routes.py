@@ -161,15 +161,27 @@ async def acquire_app_image(
         raise HTTPException(status_code=500, detail=f"获取镜像失败: {e}")
 
 
+from pydantic import BaseModel
+
+class StartAppRequest(BaseModel):
+    gpu_devices: Optional[List[int]] = None
+    device_type: Optional[str] = None  # 可选，仅当混合厂商或无法推断时才需要
+
 @router.post("/{app_id}/start", summary="启动应用")
 async def start_app(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    request: Optional[StartAppRequest] = None,
 ):
     """启动应用容器"""
     try:
         app_service = AppService()
-        result = await app_service.start_app(session, app_id)
+        result = await app_service.start_app(
+            session,
+            app_id,
+            request.gpu_devices if request else None,
+            request.device_type if request else None,
+        )
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -177,6 +189,24 @@ async def start_app(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"启动应用失败: {e}")
+
+
+@router.get("/{app_id}/available-gpus", summary="获取应用可用的GPU列表")
+async def get_available_gpus(app_id: int, session: SessionDep):
+    """获取应用可用的GPU列表"""
+    try:
+        from aistack.server.gpu_service import GPUService
+        gpu_service = GPUService()
+        available_gpus = gpu_service.get_available_gpus()
+        available_indices = gpu_service.get_available_gpu_indices()
+        
+        return {
+            "success": True,
+            "available_gpus": available_gpus,
+            "available_indices": available_indices
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取可用GPU失败: {e}")
 
 
 @router.post("/{app_id}/stop", summary="停止应用")

@@ -56,3 +56,29 @@ async def get_gpu_health():
     }
     
     return health_info
+
+
+@router.get("/available", summary="获取可用的GPU资源")
+async def get_available_gpus():
+    """获取可用的GPU资源列表，包括使用状态"""
+    try:
+        from aistack.server.gpu_service import GPUService
+        gpu_service = GPUService()
+        available_gpus = gpu_service.get_available_gpus()
+        available_indices = gpu_service.get_available_gpu_indices()
+        
+        return {
+            "success": True,
+            "gpus": available_gpus,
+            "available_indices": available_indices,
+            "total_available": len(available_indices)
+        }
+    except Exception as e:
+        logger.error(f"获取可用GPU失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "gpus": [],
+            "available_indices": [],
+            "total_available": 0
+        }
