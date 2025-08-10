@@ -237,14 +237,15 @@ async def init_preset_apps():
         for app_config in preset_apps:
             try:
                 # 检查应用是否已存在
-                existing_app = await app_service.get_app_by_name(session, app_config["name"])
+                existing_app = await app_service.get_app_by_name(session, app_config["name"], user_id=1)
                 if existing_app:
                     print(f"应用 {app_config['name']} 已存在，跳过创建")
                     continue
                 
                 # 创建应用
                 app_data = AppCreate(**app_config)
-                app = await app_service.create_app(session, app_data)
+                # 使用默认管理员用户ID (1)
+                app = await app_service.create_app(session, app_data, user_id=1)
                 print(f"成功创建预设应用: {app.name} - {app.display_name}")
                 
             except Exception as e:

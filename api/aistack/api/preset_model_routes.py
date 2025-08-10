@@ -45,7 +45,7 @@ async def get_preset_models(
         downloaded_models_query = select(ModelFile).where(
             ModelFile.is_preset_model == True
         )
-        downloaded_models = (await session.exec(downloaded_models_query)).all()
+        downloaded_models = (await session.execute(downloaded_models_query)).scalars().all()
         
         # 创建预设模型ID到下载状态的映射
         downloaded_map = {}

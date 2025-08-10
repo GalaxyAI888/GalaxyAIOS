@@ -261,5 +261,4 @@ def main():
     if hasattr(args, "func"):
         args.func(args)
     else:
-        # run(args)
-        parser.print_help()
+        run(args)

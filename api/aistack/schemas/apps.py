@@ -64,6 +64,9 @@ class AppBase(SQLModel):
     )
     app_type: AppTypeEnum = Field(default=AppTypeEnum.WEB_APP, description="应用类型")
     
+    # 用户关联
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", description="创建者用户ID")
+    
     # Docker相关配置
     image_source: ImageSourceEnum = Field(default=ImageSourceEnum.BUILD, description="镜像获取方式")
     dockerfile_path: Optional[str] = Field(default=None, description="Dockerfile路径（构建时使用）")
@@ -122,6 +125,9 @@ class App(AppBase, BaseModelMixin, table=True):
     
     # 关联实例
     instances: List["AppInstance"] = Relationship(back_populates="app")
+    
+    # 关联用户
+    user: Optional["User"] = Relationship(back_populates="apps")
 
 
 class AppCreate(AppBase):

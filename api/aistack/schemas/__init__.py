@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from aistack.schemas.users import  User, UserCreate, UserUpdate, UserPublic, UsersPublic
+from aistack.schemas.apps import App, AppCreate, AppUpdate, AppPublic, AppInstance, AppInstanceCreate, AppInstanceUpdate, AppInstancePublic
 from aistack.schemas.model_files import (
     ModelFile,
     ModelFileCreate,
@@ -19,6 +20,14 @@ __all__ = ["User",
            "UserUpdate",
            "UserPublic",
            "UsersPublic",
+           "App",
+           "AppCreate",
+           "AppUpdate",
+           "AppPublic",
+           "AppInstance",
+           "AppInstanceCreate",
+           "AppInstanceUpdate",
+           "AppInstancePublic",
            "ModelFile",
            "ModelFileCreate",
            "ModelFileUpdate",

@@ -4,12 +4,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 import asyncio
 from datetime import datetime
 
-from aistack.server.deps import SessionDep, ListParamsDep
+from aistack.server.deps import SessionDep, ListParamsDep, CurrentUserDep
 from aistack.server.app_service import AppService
 from aistack.schemas.apps import (
     AppCreate, AppUpdate, AppPublic, AppInstancePublic
 )
 from aistack.schemas.common import PaginatedList
+from aistack.schemas.users import User
 
 router = APIRouter(prefix="/apps", tags=["应用管理"])
 
@@ -17,12 +18,13 @@ router = APIRouter(prefix="/apps", tags=["应用管理"])
 @router.post("/", response_model=AppPublic, summary="创建应用")
 async def create_app(
     app_data: AppCreate,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """创建新应用"""
     try:
         app_service = AppService()
-        app = await app_service.create_app(session, app_data)
+        app = await app_service.create_app(session, app_data, current_user.id)
         return app
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -33,16 +35,17 @@ async def create_app(
 @router.get("/", response_model=List[AppPublic], summary="列出应用")
 async def list_apps(
     session: SessionDep,
+    current_user: CurrentUserDep,
     page: int = Query(1, ge=1, description="页码，从1开始"),
     per_page: int = Query(100, ge=1, le=1000, description="每页记录数"),
     category: Optional[str] = Query(None, description="应用分类"),
     is_active: Optional[bool] = Query(None, description="是否激活")
 ):
-    """列出所有应用"""
+    """列出当前用户的应用"""
     try:
         app_service = AppService()
         apps = await app_service.list_apps(
-            session, page=page, per_page=per_page, 
+            session, current_user.id, page=page, per_page=per_page, 
             category=category, is_active=is_active
         )
         return apps
@@ -53,12 +56,13 @@ async def list_apps(
 @router.get("/{app_id}", response_model=AppPublic, summary="获取应用详情")
 async def get_app(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """获取应用详情"""
     try:
         app_service = AppService()
-        app = await app_service.get_app(session, app_id)
+        app = await app_service.get_app(session, app_id, current_user.id)
         if not app:
             raise HTTPException(status_code=404, detail="应用不存在")
         return app
@@ -72,7 +76,8 @@ async def get_app(
 async def update_app(
     app_id: int,
     app_data: AppUpdate,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """更新应用信息"""
     try:
@@ -91,6 +96,7 @@ async def update_app(
 async def delete_app(
     app_id: int,
     session: SessionDep,
+    current_user: CurrentUserDep,
     cleanup_resources: bool = Query(False, description="是否同时清理Docker镜像等资源"),
     cleanup_files: bool = Query(False, description="是否同时清理映射的文件目录")
 ):
@@ -110,12 +116,13 @@ async def delete_app(
 @router.post("/{app_id}/build", summary="构建应用镜像")
 async def build_app_image(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """构建应用Docker镜像"""
     try:
         app_service = AppService()
-        result = await app_service.start_build_image(session, app_id)
+        result = await app_service.start_build_image(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -128,12 +135,13 @@ async def build_app_image(
 @router.post("/{app_id}/pull", summary="拉取应用镜像")
 async def pull_app_image(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """拉取应用Docker镜像"""
     try:
         app_service = AppService()
-        result = await app_service.start_pull_image(session, app_id)
+        result = await app_service.start_pull_image(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -146,12 +154,13 @@ async def pull_app_image(
 @router.post("/{app_id}/image", summary="获取应用镜像（自动判断build或pull）")
 async def acquire_app_image(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """获取应用Docker镜像（自动判断构建或拉取）"""
     try:
         app_service = AppService()
-        result = await app_service.start_image_acquisition(session, app_id)
+        result = await app_service.start_image_acquisition(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -171,6 +180,7 @@ class StartAppRequest(BaseModel):
 async def start_app(
     app_id: int,
     session: SessionDep,
+    current_user: CurrentUserDep,
     request: Optional[StartAppRequest] = None,
 ):
     """启动应用容器"""
@@ -179,8 +189,9 @@ async def start_app(
         result = await app_service.start_app(
             session,
             app_id,
+            current_user.id,
             request.gpu_devices if request else None,
-            request.device_type if request else None,
+            request.device_type if request else None
         )
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
@@ -192,7 +203,7 @@ async def start_app(
 
 
 @router.get("/{app_id}/available-gpus", summary="获取应用可用的GPU列表")
-async def get_available_gpus(app_id: int, session: SessionDep):
+async def get_available_gpus(app_id: int, session: SessionDep, current_user: CurrentUserDep):
     """获取应用可用的GPU列表"""
     try:
         from aistack.server.gpu_service import GPUService
@@ -212,12 +223,13 @@ async def get_available_gpus(app_id: int, session: SessionDep):
 @router.post("/{app_id}/stop", summary="停止应用")
 async def stop_app(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """停止应用容器"""
     try:
         app_service = AppService()
-        result = await app_service.stop_app(session, app_id)
+        result = await app_service.stop_app(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -230,12 +242,13 @@ async def stop_app(
 @router.get("/{app_id}/status", summary="获取应用状态")
 async def get_app_status(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """获取应用运行状态"""
     try:
         app_service = AppService()
-        result = await app_service.get_app_status(session, app_id)
+        result = await app_service.get_app_status(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -248,12 +261,13 @@ async def get_app_status(
 @router.get("/{app_id}/stats", summary="获取应用资源统计")
 async def get_app_stats(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """获取应用资源使用统计"""
     try:
         app_service = AppService()
-        result = await app_service.get_app_stats(session, app_id)
+        result = await app_service.get_app_stats(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -266,12 +280,13 @@ async def get_app_stats(
 @router.get("/{app_id}/instances", response_model=List[AppInstancePublic], summary="列出应用实例")
 async def list_app_instances(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """列出应用的所有实例"""
     try:
         app_service = AppService()
-        instances = await app_service.list_app_instances(session, app_id)
+        instances = await app_service.list_app_instances(session, app_id, current_user.id)
         return instances
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取应用实例失败: {e}")
@@ -280,12 +295,13 @@ async def list_app_instances(
 @router.post("/{app_id}/cleanup", summary="清理应用实例")
 async def cleanup_app_instances(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """清理应用的所有实例和容器"""
     try:
         app_service = AppService()
-        result = await app_service.cleanup_app_instances(session, app_id)
+        result = await app_service.cleanup_app_instances(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -298,12 +314,13 @@ async def cleanup_app_instances(
 @router.post("/{app_id}/cleanup-errors", summary="清理错误的应用实例")
 async def cleanup_error_instances(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """清理应用的错误实例和容器"""
     try:
         app_service = AppService()
-        result = await app_service.cleanup_error_instances(session, app_id)
+        result = await app_service.cleanup_error_instances(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -357,12 +374,13 @@ async def remove_docker_image(
 @router.get("/{app_id}/build/status", summary="获取构建状态")
 async def get_build_status(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """获取构建状态"""
     try:
         app_service = AppService()
-        result = await app_service.get_build_status(session, app_id)
+        result = await app_service.get_build_status(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -375,12 +393,13 @@ async def get_build_status(
 @router.get("/{app_id}/image/info", summary="查询镜像信息")
 async def get_image_info(
     app_id: int,
-    session: SessionDep
+    session: SessionDep,
+    current_user: CurrentUserDep
 ):
     """查询应用镜像详细信息"""
     try:
         app_service = AppService()
-        result = await app_service.get_image_info(session, app_id)
+        result = await app_service.get_image_info(session, app_id, current_user.id)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result["message"])
         return result
@@ -393,6 +412,7 @@ async def get_image_info(
 @router.get("/volumes/reverse-lookup", summary="根据本地路径查找映射的应用及卷信息")
 async def reverse_lookup_volumes(
     session: SessionDep,
+    current_user: CurrentUserDep,
     host_path: str = Query(..., description="要查询的本地路径")
     
 ):

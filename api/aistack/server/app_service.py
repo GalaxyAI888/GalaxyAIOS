@@ -47,6 +47,43 @@ class AppService:
             logger.warning(f"Docker权限检查失败: {e}")
             logger.warning("请确保Docker守护进程正在运行，并且当前用户有权限访问Docker")
 
+    async def _verify_app_ownership(self, session: AsyncSession, app_id: int, user_id: int) -> Tuple[bool, Optional[App], str]:
+        """
+        验证应用所有权
+        
+        Args:
+            session: 数据库会话
+            app_id: 应用ID
+            user_id: 用户ID
+            
+        Returns:
+            (是否拥有权限, 应用对象, 错误消息)
+        """
+        try:
+            # 查询应用并验证所有权
+            result = await session.exec(
+                select(App).where(App.id == app_id, App.user_id == user_id)
+            )
+            app = result.first()
+            
+            if not app:
+                # 检查应用是否存在
+                result = await session.exec(
+                    select(App).where(App.id == app_id)
+                )
+                existing_app = result.first()
+                
+                if existing_app:
+                    return False, None, "您没有权限操作此应用"
+                else:
+                    return False, None, "应用不存在"
+            
+            return True, app, ""
+            
+        except Exception as e:
+            logger.error(f"验证应用所有权失败: {e}")
+            return False, None, f"验证应用所有权失败: {e}"
+
     def _fix_temp_dir_permissions(self, temp_dir: str) -> bool:
         """
         修复临时目录权限
@@ -210,12 +247,12 @@ class AppService:
                 app.build_message = message
                 app.build_finished_at = datetime.utcnow()
    
-    async def create_app(self, session: AsyncSession, app_data: AppCreate) -> AppPublic:
+    async def create_app(self, session: AsyncSession, app_data: AppCreate, user_id: int) -> AppPublic:
         """创建应用"""
         try:
-            # 检查应用名称是否已存在
+            # 检查应用名称是否已存在（在同一用户下）
             result = await session.exec(
-                select(App).where(App.name == app_data.name)
+                select(App).where(App.name == app_data.name, App.user_id == user_id)
             )
             existing_app = result.first()
            
@@ -238,12 +275,15 @@ class AppService:
                     for url in app_data_dict['urls']
                 ]
             
+            # 添加用户ID
+            app_data_dict['user_id'] = user_id
+            
             app = App(**app_data_dict)
             session.add(app)
             await session.commit()
             await session.refresh(app)
            
-            logger.info(f"应用创建成功: {app.name}")
+            logger.info(f"应用创建成功: {app.name} (User: {user_id})")
             return AppPublic.from_orm(app)
            
         except Exception as e:
@@ -251,10 +291,13 @@ class AppService:
             logger.error(f"创建应用失败: {e}")
             raise
    
-    async def get_app(self, session: AsyncSession, app_id: int) -> Optional[AppPublic]:
+    async def get_app(self, session: AsyncSession, app_id: int, user_id: int) -> Optional[AppPublic]:
         """获取应用详情"""
         try:
-            app = await session.get(App, app_id)
+            result = await session.exec(
+                select(App).where(App.id == app_id, App.user_id == user_id)
+            )
+            app = result.first()
             if not app:
                 return None
            
@@ -264,11 +307,11 @@ class AppService:
             logger.error(f"获取应用失败: {e}")
             raise
    
-    async def get_app_by_name(self, session: AsyncSession, app_name: str) -> Optional[AppPublic]:
+    async def get_app_by_name(self, session: AsyncSession, app_name: str, user_id: int) -> Optional[AppPublic]:
         """根据名称获取应用"""
         try:
             result = await session.exec(
-                select(App).where(App.name == app_name)
+                select(App).where(App.name == app_name, App.user_id == user_id)
             )
             app = result.first()
            
@@ -281,13 +324,13 @@ class AppService:
             logger.error(f"根据名称获取应用失败: {e}")
             raise
    
-    async def list_apps(self, session: AsyncSession,
+    async def list_apps(self, session: AsyncSession, user_id: int,
                        page: int = 1, per_page: int = 100,
                        category: Optional[str] = None,
                        is_active: Optional[bool] = None) -> List[AppPublic]:
         """列出应用"""
         try:
-            query = select(App)
+            query = select(App).where(App.user_id == user_id)
            
             if category:
                 query = query.where(App.category == category)
@@ -406,14 +449,20 @@ class AppService:
             logger.error(f"删除应用失败: {e}")
             return {"success": False, "message": f"删除应用失败: {e}"}
    
-    async def start_build_image(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def start_build_image(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """启动镜像构建（异步）"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -560,7 +609,7 @@ class AppService:
                 logger.error(f"更新构建状态失败: {update_error}")
             self._cleanup_temp_dir(temp_dir)
    
-    async def get_build_status(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def get_build_status(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """获取构建状态"""
         try:
             app = await session.get(App, app_id)
@@ -604,14 +653,20 @@ class AppService:
             hours = seconds / 3600
             return f"{hours:.1f}小时"
    
-    async def start_pull_image(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def start_pull_image(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """启动镜像拉取（异步）"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -650,14 +705,20 @@ class AppService:
                         app.build_finished_at = datetime.utcnow()
             return {"success": False, "message": f"启动镜像拉取失败: {e}"}
     
-    async def start_image_acquisition(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def start_image_acquisition(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """启动镜像获取（自动判断build或pull）"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -777,7 +838,7 @@ class AppService:
         logger.warning("使用同步构建方法，建议使用异步方法 start_build_image")
         return await self.start_build_image(session, app_id)
    
-    async def get_image_info(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def get_image_info(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """获取应用镜像信息"""
         try:
             app = await session.get(App, app_id)
@@ -813,14 +874,20 @@ class AppService:
             logger.error(f"获取镜像信息失败: {e}")
             return {"success": False, "message": f"获取镜像信息失败: {e}"}
 
-    async def start_app(self, session: AsyncSession, app_id: int, gpu_devices: Optional[List[int]] = None, device_type: Optional[str] = None) -> Dict[str, Any]:
+    async def start_app(self, session: AsyncSession, app_id: int, user_id: int, gpu_devices: Optional[List[int]] = None, device_type: Optional[str] = None) -> Dict[str, Any]:
         """启动应用"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -924,14 +991,20 @@ class AppService:
             logger.error(f"启动应用失败: {e}")
             return {"success": False, "message": f"启动失败: {e}"}
 
-    async def stop_app(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def stop_app(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """停止应用"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -974,14 +1047,20 @@ class AppService:
             logger.error(f"停止应用失败: {e}")
             return {"success": False, "message": f"停止失败: {e}"}
 
-    async def get_app_status(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def get_app_status(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """获取应用状态"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -1055,14 +1134,20 @@ class AppService:
             logger.error(f"获取应用状态失败: {e}")
             return {"success": False, "message": f"获取状态失败: {e}"}
 
-    async def get_app_stats(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def get_app_stats(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """获取应用资源统计"""
         try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
             from aistack.server.db import get_engine
             engine = get_engine()
             async with AsyncSession(engine) as new_session:
                 async with new_session.begin():
+                    # 重新获取应用信息
                     app = await new_session.get(App, app_id)
                     if not app:
                         return {"success": False, "message": "应用不存在"}
@@ -1100,7 +1185,7 @@ class AppService:
             logger.error(f"获取应用统计失败: {e}")
             return {"success": False, "message": f"获取统计失败: {e}"}
 
-    async def list_app_instances(self, session: AsyncSession, app_id: int) -> List[AppInstancePublic]:
+    async def list_app_instances(self, session: AsyncSession, app_id: int, user_id: int) -> List[AppInstancePublic]:
         """列出应用实例"""
         try:
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
@@ -1173,7 +1258,7 @@ class AppService:
             logger.error(f"列出应用实例失败: {e}")
             raise
 
-    async def cleanup_app_instances(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def cleanup_app_instances(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """清理应用实例"""
         try:
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题
@@ -1218,7 +1303,7 @@ class AppService:
             logger.error(f"清理应用实例失败: {e}")
             return {"success": False, "message": f"清理失败: {e}"}
 
-    async def cleanup_error_instances(self, session: AsyncSession, app_id: int) -> Dict[str, Any]:
+    async def cleanup_error_instances(self, session: AsyncSession, app_id: int, user_id: int) -> Dict[str, Any]:
         """清理错误的应用实例"""
         try:
             # 使用新的数据库会话，避免依赖注入的 session 上下文问题

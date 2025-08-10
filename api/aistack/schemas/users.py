@@ -1,8 +1,8 @@
 from datetime import datetime
 import re
-from typing import Optional
+from typing import Optional, List
 from pydantic import field_validator
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, Relationship
 
 from .common import PaginatedList
 from ..mixins import BaseModelMixin
@@ -56,6 +56,9 @@ class User(UserBase, BaseModelMixin, table=True):
     __tablename__ = 'users'
     id: Optional[int] = Field(default=None, primary_key=True)
     hashed_password: str
+    
+    # 关联应用
+    apps: List["App"] = Relationship(back_populates="user")
 
 
 class UserPublic(UserBase):
