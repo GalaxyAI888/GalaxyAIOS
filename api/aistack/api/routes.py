@@ -28,7 +28,7 @@ v_router.include_router(preset_model_router, tags=["Preset Models"], prefix="/pr
 v_router.include_router(k8s_app_router, tags=["Kubernetes应用管理"], prefix="/k8s-apps")
 v_router.include_router(file_router, tags=["文件管理"], prefix="/files")
 v_router.include_router(gpu_router, tags=["GPU监控"], prefix="/gpu")
-v_router.include_router(image_router, tags=["镜像管理"], prefix="/images")
+v_router.include_router(image_router, tags=["镜像管理"])
 
 
 api_router.include_router(
