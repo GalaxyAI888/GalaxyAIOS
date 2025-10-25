@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import JSON, Column, Text
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -17,6 +17,11 @@ class AppStatusEnum(str, Enum):
     ERROR = "error"
     BUILDING = "building"
     BUILD_FAILED = "build_failed"
+    # Kubernetes相关状态
+    DEPLOYING = "deploying"
+    DEPLOY_FAILED = "deploy_failed"
+    SCALING = "scaling"
+    UPDATING = "updating"
 
 
 class AppTypeEnum(str, Enum):
@@ -67,10 +72,16 @@ class AppBase(SQLModel):
     # 用户关联
     user_id: Optional[int] = Field(default=None, foreign_key="users.id", description="创建者用户ID")
     
-    # Docker相关配置
+    # Kubernetes相关配置
+    deployment_yaml_url: Optional[str] = Field(default=None, description="Kubernetes Deployment YAML文件URL")
+    service_yaml_url: Optional[str] = Field(default=None, description="Kubernetes Service YAML文件URL")
+    config_yaml_url: Optional[str] = Field(default=None, description="Kubernetes ConfigMap YAML文件URL")
+    ingress_yaml_url: Optional[str] = Field(default=None, description="Kubernetes Ingress YAML文件URL")
+    
+    # Docker相关配置（保留兼容性）
     image_source: ImageSourceEnum = Field(default=ImageSourceEnum.BUILD, description="镜像获取方式")
     dockerfile_path: Optional[str] = Field(default=None, description="Dockerfile路径（构建时使用）")
-    image_name: str = Field(description="Docker镜像名称")
+    image_name: Optional[str] = Field(default=None, description="Docker镜像名称")
     image_tag: str = Field(default="latest", description="Docker镜像标签")
     image_url: Optional[str] = Field(default=None, description="镜像完整地址（拉取时使用）")
     
@@ -117,6 +128,14 @@ class AppBase(SQLModel):
         default=None, sa_column=Column(UTCDateTime), description="构建完成时间"
     )
 
+    @model_validator(mode="after")
+    def validate_image_fields(self):
+        """当未提供 deployment_yaml_url 时，要求 image_name 或 image_url 至少一个存在。"""
+        if not self.deployment_yaml_url:
+            if not (self.image_name or self.image_url):
+                raise ValueError("当未提供 deployment_yaml_url 时，需要提供 image_name 或 image_url 之一")
+        return self
+
 
 class App(AppBase, BaseModelMixin, table=True):
     """应用数据库模型"""
@@ -140,6 +159,14 @@ class AppUpdate(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     app_type: Optional[AppTypeEnum] = None
+    
+    # Kubernetes相关配置
+    deployment_yaml_url: Optional[str] = None
+    service_yaml_url: Optional[str] = None
+    config_yaml_url: Optional[str] = None
+    ingress_yaml_url: Optional[str] = None
+    
+    # Docker相关配置（保留兼容性）
     image_source: Optional[ImageSourceEnum] = None
     dockerfile_path: Optional[str] = None
     image_name: Optional[str] = None

@@ -141,6 +141,10 @@ class Config(BaseSettings):
 
     # 大模型API超时时间（秒）
     model_api_timeout: int = 900
+    
+    # 测试token配置
+    test_token: Optional[str] = None
+    test_user_id: int = 1  # 测试用户ID，写死为1
 
     def __init__(self, **values):
         super().__init__(**values)
@@ -171,6 +175,7 @@ class Config(BaseSettings):
         # 先准备 token，再检查
         self.prepare_token()
         self.prepare_jwt_secret_key()
+        self.prepare_test_token()
 
         # 检查 token 要求
         if not self._is_server() and not self.token:
@@ -331,6 +336,32 @@ class Config(BaseSettings):
                 file.write(key)
 
         self.jwt_secret_key = key
+
+    def prepare_test_token(self):
+        """准备测试token"""
+        if self.test_token is not None:
+            return
+
+        token_path = os.path.join(self.data_dir, "test_token.txt")
+        if os.path.exists(token_path):
+            with open(token_path, "r",encoding='utf-8') as file:
+                content = file.read()
+                # 从文件中提取token
+                for line in content.split('\n'):
+                    if line.startswith('测试Token:'):
+                        self.test_token = line.split(':', 1)[1].strip()
+                        break
+        else:
+            # 生成新的测试token
+            self.test_token = f"test_token_{secrets.token_hex(16)}"
+            os.makedirs(self.data_dir, exist_ok=True)
+            with open(token_path, "w", encoding="utf-8") as file:
+                file.write(f"测试Token: {self.test_token}\n")
+                file.write(f"用户ID: {self.test_user_id}\n")
+                file.write(f"用户名: test_user\n")
+                file.write(f"权限: 管理员\n")
+                file.write(f"\n使用方法:\n")
+                file.write(f"Authorization: Bearer {self.test_token}\n")
 
     def _is_server(self):
         return self.server_url is None

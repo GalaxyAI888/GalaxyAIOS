@@ -165,6 +165,21 @@ async def get_current_user_info(current_user: CurrentUserDep):
     return UserPublic.model_validate(current_user)
 
 
+@router.get("/test-token", summary="获取测试token信息")
+async def get_test_token_info():
+    """获取测试token信息（仅用于开发环境）"""
+    config = get_global_config()
+    if not config or not config.test_token:
+        raise HTTPException(status_code=404, detail="测试token未配置")
+    
+    return {
+        "test_token": config.test_token,
+        "test_user_id": config.test_user_id,
+        "usage": f"Authorization: Bearer {config.test_token}",
+        "description": "使用此token可以自动认证为测试用户，具有管理员权限"
+    }
+
+
 @router.get("", response_model=UsersPublic)
 async def get_users(session: SessionDep, params: ListParamsDep, search: str = None):
     fuzzy_fields = {}

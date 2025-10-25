@@ -4,6 +4,7 @@ from functools import partial
 import glob
 from itertools import chain
 import logging
+import os
 import time
 from typing import Dict, Tuple
 from multiprocessing import Manager, cpu_count
@@ -81,6 +82,7 @@ class ModelFileManager:
 
         self._clientset.model_files.update(id=id, model_update=model_file_update)
 
+    
     async def _handle_deletion(self, model_file: ModelFile):
         entry = self._active_downloads.pop(model_file.id, None)
         if entry:
@@ -157,6 +159,71 @@ class ModelFileDownloadTask:
         self._model_file = model_file
         self._config = cfg
         self._cancel_flag = cancel_flag
+    def _get_existing_file_size(self) -> int:
+        """获取已下载文件的实际大小"""
+        try:
+            total_size = 0
+            
+            # 检查本地目录中的文件
+            if self._model_file.local_dir and os.path.exists(self._model_file.local_dir):
+                # 如果是整个目录下载，计算目录中所有文件的大小
+                if not self._model_file.model_scope_file_path and not self._model_file.huggingface_filename:
+                    # 整个目录下载
+                    for root, dirs, files in os.walk(self._model_file.local_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            if os.path.exists(file_path):
+                                try:
+                                    total_size += os.path.getsize(file_path)
+                                except (OSError, IOError) as e:
+                                    logger.warning(f"Failed to get size of {file_path}: {e}")
+                                    continue
+                else:
+                    # 单个文件下载，检查特定文件
+                    if self._model_file.model_scope_file_path:
+                        # ModelScope 单个文件
+                        file_path = os.path.join(self._model_file.local_dir, self._model_file.model_scope_file_path)
+                        if os.path.exists(file_path):
+                            try:
+                                total_size += os.path.getsize(file_path)
+                            except (OSError, IOError) as e:
+                                logger.warning(f"Failed to get size of {file_path}: {e}")
+                    elif self._model_file.huggingface_filename:
+                        # HuggingFace 单个文件
+                        file_path = os.path.join(self._model_file.local_dir, self._model_file.huggingface_filename)
+                        if os.path.exists(file_path):
+                            try:
+                                total_size += os.path.getsize(file_path)
+                            except (OSError, IOError) as e:
+                                logger.warning(f"Failed to get size of {file_path}: {e}")
+            
+            # 检查已解析的文件路径
+            if self._model_file.resolved_paths:
+                for path in self._model_file.resolved_paths:
+                    if os.path.exists(path):
+                        if os.path.isfile(path):
+                            try:
+                                total_size += os.path.getsize(path)
+                            except (OSError, IOError) as e:
+                                logger.warning(f"Failed to get size of {path}: {e}")
+                        elif os.path.isdir(path):
+                            # 如果是目录，计算目录中所有文件的大小
+                            for root, dirs, files in os.walk(path):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    if os.path.exists(file_path):
+                                        try:
+                                            total_size += os.path.getsize(file_path)
+                                        except (OSError, IOError) as e:
+                                            logger.warning(f"Failed to get size of {file_path}: {e}")
+                                            continue
+            
+            logger.debug(f"Existing file size for {self._model_file.readable_source}: {total_size} bytes")
+            return total_size
+            
+        except Exception as e:
+            logger.warning(f"Failed to calculate existing file size: {e}")
+            return 0
 
     def prerun(self):
         setup_logging(self._config.debug)
@@ -169,14 +236,26 @@ class ModelFileDownloadTask:
         self._ensure_model_file_size()
 
         self._last_download_update_time = 0
-        self._model_downloaded_size = 0
+        
+        # 检测已下载文件的实际大小，避免进度计算错误
+        self._initial_downloaded_size = self._get_existing_file_size()
+        
         logger.debug(f"Initializing task for {self._model_file.readable_source}")
+        logger.debug(f"Existing downloaded size: {self._initial_downloaded_size} bytes")
+        
         self._update_progress_func = partial(
             self._update_model_file_progress, self._model_file.id
         )
         self._model_file_size = self._model_file.size
-        self._model_downloaded_size = 0
+        
+        # 如果已有部分文件，更新初始进度
+        if self._initial_downloaded_size > 0 and self._model_file_size > 0:
+            initial_progress = round((self._initial_downloaded_size / self._model_file_size) * 100, 2)
+            logger.info(f"Resuming download from {initial_progress}% ({self._initial_downloaded_size}/{self._model_file_size} bytes)")
+            self._update_progress_func(initial_progress)
+        
         self.hijack_tqdm_progress()
+
 
     def run(self):
         try:
@@ -230,8 +309,9 @@ class ModelFileDownloadTask:
             _original_init(self, *args, **kwargs)
 
             if hasattr(task_self, '_model_file_size'):
-                # Resume downloading
-                task_self._model_downloaded_size += self.n
+                # 不要在这里累积，因为这会重复计算已下载的大小
+                # 初始进度已经在prerun中正确设置了
+                pass
 
         def _new_update(self: tqdm, n=1):
             _original_update(self, n)
@@ -243,11 +323,18 @@ class ModelFileDownloadTask:
             # TODO we may want to unify to always get the size before downloading.
             total_size = self.total
             downloaded_size = self.n
+            
             if hasattr(task_self, '_model_file_size'):
                 # This is summary for group downloading
                 total_size = task_self._model_file_size
-                task_self._model_downloaded_size += n
-                downloaded_size = task_self._model_downloaded_size
+                
+                # 对于整个目录下载，使用tqdm的当前进度加上初始已下载大小
+                # 这样可以正确反映断点续传的进度
+                initial_downloaded_size = getattr(task_self, '_initial_downloaded_size', 0)
+                downloaded_size = initial_downloaded_size + self.n
+                
+                # 添加调试日志
+                logger.debug(f"Progress update: initial={initial_downloaded_size}, tqdm_n={self.n}, total={total_size}, calculated={downloaded_size}")
 
             try:
                 if (
@@ -257,12 +344,21 @@ class ModelFileDownloadTask:
                     # Only update after 2-second interval or download is completed.
                     return
 
-                task_self._update_progress_func(
-                    round((downloaded_size / total_size) * 100, 2)
-                )
+                # 计算进度百分比，确保不超过100%
+                progress_percent = round((downloaded_size / total_size) * 100, 2)
+                
+                # 限制进度不超过100%，避免显示超过100%的进度
+                if progress_percent > 100:
+                    progress_percent = 100.0
+                    logger.warning(
+                        f"Download progress exceeded 100% for {task_self._model_file.readable_source}: "
+                        f"downloaded={downloaded_size}, total={total_size}, progress={progress_percent}%"
+                    )
+
+                task_self._update_progress_func(progress_percent)
                 task_self._last_download_update_time = time.time()
             except Exception as e:
-                raise Exception(f"Failed to update model file: {e}")
+                logger.warning(f"Failed to update progress: {e}")
 
         tqdm.__init__ = _new_init
         tqdm.update = _new_update

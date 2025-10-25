@@ -1,0 +1,7 @@
+{
+    "name": "demo-k8s-app",
+    "display_name": "Demo K8S 应用",
+    "image_name": "nginx:1.25-alpine",
+    "deployment_yaml_url": "http://localhost:9999/static/nginxDepolement.yaml",
+    "service_yaml_url": "http://localhost:9999/static/nginxService.yaml"
+  }

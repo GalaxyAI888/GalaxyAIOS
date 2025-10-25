@@ -38,6 +38,9 @@ aiohttp>=3.11.2,<4.0.0
 # Docker management
 docker>=6.1.0,<7.0.0
 
+# Kubernetes management
+kubernetes>=28.1.0,<29.0.0
+
 # File upload support
 python-multipart>=0.0.6,<1.0.0
 

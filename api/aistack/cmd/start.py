@@ -4,6 +4,7 @@ import asyncio
 import logging
 import multiprocessing
 import os
+import traceback
 from typing import Optional, Dict, Any
 
 import yaml
@@ -205,8 +206,9 @@ def run(args: argparse.Namespace):
         run_server(cfg)
     except Exception as e:
         print(f"Failed to start: {e}")
+        traceback.print_exc()
         LOG.fatal(e)
-
+ 
 
 def run_server(cfg: Config):
     sub_processes = []

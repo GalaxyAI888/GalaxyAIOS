@@ -17,6 +17,7 @@ sdist/
 var/
 wheels/
 .specstory/
+.codebuddy/
 .cursorindexingignore
 *.egg-info/
 .installed.cfg

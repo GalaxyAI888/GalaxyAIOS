@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-ai-app
+  labels:
+    app: example-ai-app
+    managed-by: aistack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: example-ai-app
+  template:
+    metadata:
+      labels:
+        app: example-ai-app
+    spec:
+      containers:
+      - name: ai-app
+        image: nginx:latest  # 替换为实际的AI应用镜像
+        ports:
+        - containerPort: 80
+        env:
+        - name: MODEL_PATH
+          value: "/models"
+        - name: API_PORT
+          value: "80"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+          readOnly: false
+        - name: data-storage
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: model-storage
+        hostPath:
+          path: /opt/aistack/models/example-ai-app
+          type: DirectoryOrCreate
+      - name: data-storage
+        hostPath:
+          path: /opt/aistack/data/example-ai-app
+          type: DirectoryOrCreate
+      restartPolicy: Always
+

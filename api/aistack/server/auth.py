@@ -13,6 +13,8 @@ from aistack.utils.parse_client import parse_client
 
 # 安全认证
 security = HTTPBearer()
+# 可选安全认证（不自动抛 401）
+optional_security = HTTPBearer(auto_error=False)
 
 # JWT管理器
 def get_jwt_manager():
@@ -29,6 +31,28 @@ async def get_current_user(
 ) -> User:
     """获取当前用户"""
     try:
+        # 检查是否为测试token
+        config = get_global_config()
+        if config and config.test_token and credentials.credentials == config.test_token:
+            # 使用测试token，返回写死的测试用户
+            result = await session.execute(select(User).where(User.id == config.test_user_id))
+            user = result.scalar_one_or_none()
+            
+            if user is None:
+                # 如果测试用户不存在，创建一个
+                user = User(
+                    id=config.test_user_id,
+                    username="test_user",
+                    hashed_password="",  # 测试用户不需要密码
+                    is_admin=True,  # 测试用户设为管理员
+                    full_name="测试用户"
+                )
+                session.add(user)
+                await session.commit()
+                await session.refresh(user)
+            
+            return user
+        
         # 解码JWT token
         jwt_manager = get_jwt_manager()
         payload = jwt_manager.decode_jwt_token(credentials.credentials)
@@ -96,7 +120,7 @@ async def get_admin_user(current_user: User = Depends(get_current_user)) -> User
 
 
 async def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
     session: AsyncSession = Depends(get_session)
 ) -> Optional[User]:
     """获取可选用户（不强制要求认证）"""
@@ -104,6 +128,28 @@ async def get_optional_user(
         return None
     
     try:
+        # 检查是否为测试token
+        config = get_global_config()
+        if config and config.test_token and credentials.credentials == config.test_token:
+            # 使用测试token，返回写死的测试用户
+            result = await session.execute(select(User).where(User.id == config.test_user_id))
+            user = result.scalar_one_or_none()
+            
+            if user is None:
+                # 如果测试用户不存在，创建一个
+                user = User(
+                    id=config.test_user_id,
+                    username="test_user",
+                    hashed_password="",  # 测试用户不需要密码
+                    is_admin=True,  # 测试用户设为管理员
+                    full_name="测试用户"
+                )
+                session.add(user)
+                await session.commit()
+                await session.refresh(user)
+            
+            return user
+        
         return await get_current_user(credentials, session)
     except HTTPException:
         return None
