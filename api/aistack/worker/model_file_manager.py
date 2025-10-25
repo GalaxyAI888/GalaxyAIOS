@@ -138,8 +138,11 @@ class ModelFileManager:
         async def _check_completion():
             try:
                 await asyncio.wrap_future(future)
+                logger.info(f"🎉 Download task completed successfully: {model_file.readable_source}")
+            except asyncio.CancelledError:
+                logger.info(f"⏹️ Download task cancelled: {model_file.readable_source}")
             except Exception as e:
-                logger.error(f"Failed to download model file: {e}")
+                logger.error(f"💥 Download task failed: {model_file.readable_source} - {e}")
                 await self._update_model_file(
                     model_file.id,
                     state=ModelFileStateEnum.ERROR,
@@ -147,8 +150,7 @@ class ModelFileManager:
                 )
             finally:
                 self._active_downloads.pop(model_file.id, None)
-
-            logger.debug(f"Download completed for {model_file.readable_source}")
+                logger.debug(f"Download task finished for {model_file.readable_source}")
 
         asyncio.create_task(_check_completion())
 
@@ -274,21 +276,30 @@ class ModelFileDownloadTask:
             )
 
     def _download_model_file(self):
-        logger.info(f"Downloading model file {self._model_file.readable_source}")
-        model_paths = downloaders.download_model(
-            self._model_file,
-            local_dir=self._model_file.local_dir,
-            cache_dir=self._config.cache_dir,
-            ollama_library_base_url=self._config.ollama_library_base_url,
-            huggingface_token=self._config.huggingface_token,
-        )
-        self._update_model_file(
-            self._model_file.id,
-            state=ModelFileStateEnum.READY,
-            download_progress=100,
-            resolved_paths=model_paths,
-        )
-        logger.info(f"Successfully downloaded {self._model_file.readable_source}")
+        logger.info(f"Starting download of model file: {self._model_file.readable_source}")
+        try:
+            model_paths = downloaders.download_model(
+                self._model_file,
+                local_dir=self._model_file.local_dir,
+                cache_dir=self._config.cache_dir,
+                ollama_library_base_url=self._config.ollama_library_base_url,
+                huggingface_token=self._config.huggingface_token,
+            )
+            
+            # 更新模型文件状态为完成
+            self._update_model_file(
+                self._model_file.id,
+                state=ModelFileStateEnum.READY,
+                download_progress=100,
+                resolved_paths=model_paths,
+            )
+            
+            logger.info(f"✅ Download completed successfully: {self._model_file.readable_source}")
+            logger.info(f"📁 Downloaded files: {model_paths}")
+            
+        except Exception as e:
+            logger.error(f"❌ Download failed for {self._model_file.readable_source}: {e}")
+            raise
 
     def hijack_tqdm_progress(task_self):
         """
@@ -337,13 +348,6 @@ class ModelFileDownloadTask:
                 logger.debug(f"Progress update: initial={initial_downloaded_size}, tqdm_n={self.n}, total={total_size}, calculated={downloaded_size}")
 
             try:
-                if (
-                    time.time() - task_self._last_download_update_time < 2
-                    and downloaded_size != total_size
-                ):
-                    # Only update after 2-second interval or download is completed.
-                    return
-
                 # 计算进度百分比，确保不超过100%
                 progress_percent = round((downloaded_size / total_size) * 100, 2)
                 
@@ -355,8 +359,22 @@ class ModelFileDownloadTask:
                         f"downloaded={downloaded_size}, total={total_size}, progress={progress_percent}%"
                     )
 
-                task_self._update_progress_func(progress_percent)
-                task_self._last_download_update_time = time.time()
+                # 检查是否需要更新进度
+                should_update = (
+                    # 下载完成时立即更新
+                    downloaded_size >= total_size or
+                    # 或者距离上次更新超过2秒
+                    time.time() - task_self._last_download_update_time >= 2
+                )
+                
+                if should_update:
+                    task_self._update_progress_func(progress_percent)
+                    task_self._last_download_update_time = time.time()
+                    
+                    # 如果下载完成，记录成功日志
+                    if downloaded_size >= total_size and progress_percent >= 100:
+                        logger.info(f"Download progress reached 100% for {task_self._model_file.readable_source}")
+                        
             except Exception as e:
                 logger.warning(f"Failed to update progress: {e}")
 

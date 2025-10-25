@@ -2,7 +2,7 @@ import docker
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 from datetime import datetime
 from aistack.schemas.apps import AppStatusEnum, AppVolume, AppURL
 import subprocess
@@ -82,7 +82,7 @@ class DockerManager:
             return False, f"权限检查失败: {e}"
 
     def build_image(self, dockerfile_path: str, image_name: str, image_tag: str = "latest", 
-                   build_args: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+                   build_args: Optional[Dict[str, str]] = None, progress_callback: Optional[Callable] = None) -> Tuple[bool, str]:
         """
         构建Docker镜像
         
@@ -91,6 +91,7 @@ class DockerManager:
             image_name: 镜像名称
             image_tag: 镜像标签
             build_args: 构建参数
+            progress_callback: 进度回调函数，接收(step, total, message)参数
             
         Returns:
             (成功标志, 消息)
@@ -119,17 +120,31 @@ class DockerManager:
             if not os.access(dockerfile_path, os.R_OK):
                 return False, f"没有读取Dockerfile的权限: {dockerfile_path}"
             
-            # 验证Dockerfile内容
+            # 验证Dockerfile内容（尝试多种编码）
             try:
-                with open(dockerfile_path, 'r') as f:
-                    content = f.read().strip()
-                    if not content:
-                        return False, f"Dockerfile内容为空: {dockerfile_path}"
+                content = None
+                encodings = ['utf-8', 'gbk', 'gb2312', 'latin-1', 'cp1252']
+                
+                for encoding in encodings:
+                    try:
+                        with open(dockerfile_path, 'r', encoding=encoding) as f:
+                            content = f.read().strip()
+                            logger.info(f"Dockerfile读取成功，使用编码: {encoding}")
+                            break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if content is None:
+                    return False, f"无法读取Dockerfile内容，尝试了多种编码都失败: {dockerfile_path}"
+                
+                if not content:
+                    return False, f"Dockerfile内容为空: {dockerfile_path}"
+                
+                # 检查是否包含Dockerfile的基本指令
+                if not any(keyword in content.upper() for keyword in ['FROM', 'RUN', 'CMD', 'ENTRYPOINT', 'COPY', 'ADD']):
+                    logger.warning(f"Dockerfile可能不是有效的: {dockerfile_path}")
+                    logger.warning(f"Dockerfile内容前100字符: {content[:100]}")
                     
-                    # 检查是否包含Dockerfile的基本指令
-                    if not any(keyword in content.upper() for keyword in ['FROM', 'RUN', 'CMD', 'ENTRYPOINT', 'COPY', 'ADD']):
-                        logger.warning(f"Dockerfile可能不是有效的: {dockerfile_path}")
-                        logger.warning(f"Dockerfile内容前100字符: {content[:100]}")
             except Exception as e:
                 return False, f"无法读取Dockerfile内容: {e}"
             
@@ -142,16 +157,82 @@ class DockerManager:
                 logger.info(f"开始Docker构建，上下文目录: {dockerfile_dir}")
                 logger.info(f"Dockerfile名称: {dockerfile_name}")
                 
-                # 简化构建调用，移除可能导致问题的参数
-                image, build_logs = self.client.images.build(
-                    path=dockerfile_dir,
-                    dockerfile=dockerfile_name,
-                    tag=f"{image_name}:{image_tag}",
-                    buildargs=build_args or {},
-                    rm=True  # 构建完成后删除中间容器
-                )
+                if progress_callback:
+                    progress_callback(1, 10, "开始构建镜像...")
                 
-                # 简化日志处理
+                # 构建镜像，支持进度回调（创建两个标签）
+                try:
+                    original_tag = f"{image_name}:{image_tag}"
+                    service_tag = f"{image_name}:{image_tag}.galaxyaios"
+                    
+                    # 先构建原始标签
+                    image, build_logs = self.client.images.build(
+                        path=dockerfile_dir,
+                        dockerfile=dockerfile_name,
+                        tag=original_tag,  # 使用原始标签构建
+                        buildargs=build_args or {},
+                        rm=True,  # 构建完成后删除中间容器
+                        decode=False  # 禁用自动解码，手动处理
+                    )
+                    
+                    # 构建完成后，添加服务标识标签
+                    try:
+                        image.tag(service_tag, force=True)
+                        logger.info(f"镜像构建完成，原始标签: {original_tag}, 服务标识标签: {service_tag}")
+                    except Exception as tag_error:
+                        logger.warning(f"添加服务标识标签失败: {tag_error}")
+                        
+                except Exception as build_error:
+                    logger.error(f"Docker构建过程中出错: {build_error}")
+                    return False, f"镜像构建失败: {build_error}"
+                
+                # 处理构建日志
+                if progress_callback and build_logs:
+                    step = 2
+                    total_steps = 10
+                    for log_entry in build_logs:
+                        try:
+                            if isinstance(log_entry, dict):
+                                if 'stream' in log_entry:
+                                    message = log_entry['stream'].strip()
+                                    if message:
+                                        progress_callback(step, total_steps, message)
+                                        step = min(step + 1, total_steps - 1)
+                                elif 'error' in log_entry:
+                                    error_msg = log_entry['error'].strip()
+                                    if error_msg:
+                                        progress_callback(step, total_steps, f"错误: {error_msg}")
+                            elif isinstance(log_entry, str):
+                                # 如果日志是字符串格式
+                                message = log_entry.strip()
+                                if message:
+                                    progress_callback(step, total_steps, message)
+                                    step = min(step + 1, total_steps - 1)
+                            elif isinstance(log_entry, bytes):
+                                # 如果日志是字节格式，尝试解码
+                                try:
+                                    message = log_entry.decode('utf-8').strip()
+                                    if message:
+                                        progress_callback(step, total_steps, message)
+                                        step = min(step + 1, total_steps - 1)
+                                except UnicodeDecodeError:
+                                    # 如果UTF-8解码失败，尝试其他编码
+                                    for encoding in ['gbk', 'gb2312', 'latin-1']:
+                                        try:
+                                            message = log_entry.decode(encoding).strip()
+                                            if message:
+                                                progress_callback(step, total_steps, message)
+                                                step = min(step + 1, total_steps - 1)
+                                            break
+                                        except UnicodeDecodeError:
+                                            continue
+                        except Exception as log_error:
+                            logger.warning(f"处理构建日志时出错: {log_error}")
+                            continue
+                
+                if progress_callback:
+                    progress_callback(10, 10, "构建完成")
+                
                 logger.info(f"构建完成，镜像标签: {image.tags}")
                 return True, f"镜像构建成功: {image.tags[0]}"
                 
@@ -162,13 +243,19 @@ class DockerManager:
                 if hasattr(e, 'build_log') and e.build_log:
                     logger.error("构建错误日志:")
                     for log in e.build_log:
-                        if isinstance(log, dict):
-                            if 'error' in log:
-                                logger.error(f"错误: {log['error']}")
-                            elif 'stream' in log:
-                                logger.error(f"日志: {log['stream'].strip()}")
-                        else:
-                            logger.error(f"日志: {log}")
+                        try:
+                            if isinstance(log, dict):
+                                if 'error' in log:
+                                    logger.error(f"错误: {log['error']}")
+                                elif 'stream' in log:
+                                    logger.error(f"日志: {log['stream'].strip()}")
+                            elif isinstance(log, str):
+                                logger.error(f"日志: {log}")
+                            else:
+                                logger.error(f"日志: {log}")
+                        except Exception as log_error:
+                            logger.warning(f"处理错误日志时出错: {log_error}")
+                            continue
                 return False, error_msg
                 
         except docker.errors.APIError as e:
@@ -180,13 +267,14 @@ class DockerManager:
             logger.error(error_msg)
             return False, error_msg
     
-    def pull_image(self, image_name: str, image_tag: str = "latest") -> Tuple[bool, str]:
+    def pull_image(self, image_name: str, image_tag: str = "latest", progress_callback: Optional[Callable] = None) -> Tuple[bool, str]:
         """
         拉取Docker镜像
         
         Args:
             image_name: 镜像名称（可以是完整地址）
             image_tag: 镜像标签
+            progress_callback: 进度回调函数，接收(step, total, message)参数
             
         Returns:
             (成功标志, 消息)
@@ -195,8 +283,33 @@ class DockerManager:
             full_image_name = f"{image_name}:{image_tag}"
             logger.info(f"开始拉取镜像: {full_image_name}")
             
-            # 拉取镜像
+            if progress_callback:
+                progress_callback(1, 5, "开始拉取镜像...")
+            
+            # 拉取镜像，支持进度回调
+            if progress_callback:
+                progress_callback(2, 5, "正在拉取镜像...")
+            
+            # 使用正确的拉取方法
             image = self.client.images.pull(image_name, tag=image_tag)
+            
+            if progress_callback:
+                progress_callback(3, 5, "镜像拉取中...")
+                progress_callback(4, 5, "添加服务标签...")
+            
+            # 为拉取的镜像添加服务标识（通过重新标记）
+            try:
+                # 创建带服务标识的新标签
+                service_tag = f"{image_name}:{image_tag}.galaxyaios"
+                image.tag(service_tag, force=True)
+                
+                logger.info(f"添加服务标识标签: {service_tag}")
+                
+            except Exception as e:
+                logger.warning(f"添加服务标识失败，但镜像拉取成功: {e}")
+            
+            if progress_callback:
+                progress_callback(5, 5, "拉取完成")
             
             logger.info(f"镜像拉取成功: {image.tags}")
             return True, f"镜像拉取成功: {image.tags[0]}"
@@ -208,7 +321,7 @@ class DockerManager:
     
     def get_image_info(self, image_name: str, image_tag: str = "latest") -> Tuple[bool, str, Optional[Dict]]:
         """
-        获取镜像信息
+        获取镜像信息（支持服务创建的镜像查找）
         
         Args:
             image_name: 镜像名称
@@ -219,7 +332,18 @@ class DockerManager:
         """
         try:
             full_image_name = f"{image_name}:{image_tag}"
-            image = self.client.images.get(full_image_name)
+            
+            # 首先尝试直接获取镜像
+            try:
+                image = self.client.images.get(full_image_name)
+            except docker.errors.ImageNotFound:
+                # 如果直接获取失败，尝试查找带服务标识的镜像
+                service_image_name = f"{image_name}:{image_tag}.galaxyaios"
+                try:
+                    image = self.client.images.get(service_image_name)
+                    logger.info(f"找到服务镜像: {service_image_name}")
+                except docker.errors.ImageNotFound:
+                    return False, f"镜像不存在: {full_image_name}", None
             
             image_info = {
                 'id': image.id,
@@ -232,8 +356,6 @@ class DockerManager:
             
             return True, "获取镜像信息成功", image_info
             
-        except docker.errors.ImageNotFound:
-            return False, f"镜像不存在: {full_image_name}", None
         except Exception as e:
             error_msg = f"获取镜像信息失败: {e}"
             logger.error(error_msg)
@@ -766,7 +888,7 @@ class DockerManager:
     
     def list_images(self) -> List[Dict]:
         """
-        列出镜像
+        列出镜像（只显示服务创建的镜像）
         
         Returns:
             镜像列表
@@ -775,14 +897,54 @@ class DockerManager:
             images = self.client.images.list()
             image_list = []
             
+            # 系统镜像过滤规则
+            system_image_patterns = [
+                'docker/desktop-',
+                'registry.k8s.io/',
+                'k8s.gcr.io/',
+                'gcr.io/',
+                'pause',
+                'etcd',
+                'coredns',
+                'kube-',
+                'calico',
+                'flannel',
+                'weave',
+                'cilium',
+                '<none>',  # 无标签镜像
+            ]
+            
             for image in images:
-                image_info = {
-                    'id': image.id,
-                    'tags': image.tags,
-                    'created': image.attrs['Created'],
-                    'size': image.attrs['Size']
-                }
-                image_list.append(image_info)
+                # 检查是否是服务创建的镜像（通过标签后缀识别）
+                image_tags = image.tags or ['<none>']
+                is_service_image = False
+                
+                for tag in image_tags:
+                    if tag.endswith('.galaxyaios'):
+                        is_service_image = True
+                        break
+                
+                # 检查是否是系统镜像
+                is_system_image = False
+                for tag in image_tags:
+                    for pattern in system_image_patterns:
+                        if pattern in tag.lower():
+                            is_system_image = True
+                            break
+                    if is_system_image:
+                        break
+                
+                # 只显示服务创建的镜像，过滤掉系统镜像
+                if is_service_image and not is_system_image:
+                    image_info = {
+                        'id': image.id,
+                        'tags': image.tags,
+                        'created': image.attrs['Created'],
+                        'size': image.attrs['Size'],
+                        'created_by': 'image_service',
+                        'created_at': str(int(time.time()))
+                    }
+                    image_list.append(image_info)
             
             return image_list
             
@@ -792,7 +954,7 @@ class DockerManager:
     
     def remove_image(self, image_name: str, image_tag: str = "latest") -> Tuple[bool, str]:
         """
-        删除镜像
+        删除镜像（只允许删除服务创建的镜像）
         
         Args:
             image_name: 镜像名称
@@ -804,8 +966,83 @@ class DockerManager:
         try:
             logger.info(f"开始删除镜像: {image_name}:{image_tag}")
             
-            image = self.client.images.get(f"{image_name}:{image_tag}")
-            self.client.images.remove(image.id, force=True)
+            # 智能查找镜像
+            full_image_name = f"{image_name}:{image_tag}"
+            try:
+                image = self.client.images.get(full_image_name)
+            except docker.errors.ImageNotFound:
+                # 尝试查找带服务标识的镜像
+                service_image_name = f"{image_name}:{image_tag}.galaxyaios"
+                try:
+                    image = self.client.images.get(service_image_name)
+                    logger.info(f"找到服务镜像进行删除: {service_image_name}")
+                except docker.errors.ImageNotFound:
+                    return False, f"镜像不存在: {full_image_name}"
+            
+            # 检查是否是服务创建的镜像（通过标签后缀识别）
+            image_tags = image.tags or ['<none>']
+            is_service_image = False
+            
+            for tag in image_tags:
+                if tag.endswith('.galaxyaios'):
+                    is_service_image = True
+                    break
+            
+            if not is_service_image:
+                return False, f"只能删除服务创建的镜像: {image_name}:{image_tag}"
+            
+            # 检查是否是系统镜像
+            system_image_patterns = [
+                'docker/desktop-',
+                'registry.k8s.io/',
+                'k8s.gcr.io/',
+                'gcr.io/',
+                'pause',
+                'etcd',
+                'coredns',
+                'kube-',
+                'calico',
+                'flannel',
+                'weave',
+                'cilium',
+            ]
+            
+            image_tags = image.tags or ['<none>']
+            for tag in image_tags:
+                for pattern in system_image_patterns:
+                    if pattern in tag.lower():
+                        return False, f"不能删除系统镜像: {image_name}:{image_tag}"
+            
+            # 删除镜像的所有标签，然后删除镜像本身
+            try:
+                # 获取镜像的所有标签
+                all_tags = image.tags or []
+                logger.info(f"镜像的所有标签: {all_tags}")
+                
+                # 先删除所有标签
+                deleted_tags = []
+                for tag in all_tags:
+                    try:
+                        self.client.images.remove(tag, force=True)
+                        logger.info(f"删除标签: {tag}")
+                        deleted_tags.append(tag)
+                    except Exception as tag_error:
+                        logger.warning(f"删除标签失败 {tag}: {tag_error}")
+                
+                # 尝试删除镜像本身（通过ID）
+                # 注意：删除所有标签后，Docker可能已经自动删除了镜像
+                try:
+                    self.client.images.remove(image.id, force=True)
+                    logger.info(f"删除镜像ID: {image.id}")
+                except docker.errors.ImageNotFound:
+                    # 镜像已经被自动删除，这是正常情况
+                    logger.info(f"镜像 {image.id} 已被自动删除（删除标签后）")
+                except Exception as image_error:
+                    logger.warning(f"删除镜像ID失败: {image_error}")
+                
+            except Exception as remove_error:
+                logger.error(f"删除镜像时出错: {remove_error}")
+                return False, f"镜像删除失败: {remove_error}"
             
             logger.info(f"镜像删除成功: {image_name}:{image_tag}")
             return True, f"镜像删除成功: {image_name}:{image_tag}"

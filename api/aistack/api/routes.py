@@ -11,6 +11,7 @@ from aistack.api.k8s_app_routes import router as k8s_app_router
 from aistack.api.file_routes import router as file_router
 
 from aistack.api.gpu_routes import router as gpu_router
+from aistack.api.image_routes import router as image_router
 
 
 
@@ -27,6 +28,7 @@ v_router.include_router(preset_model_router, tags=["Preset Models"], prefix="/pr
 v_router.include_router(k8s_app_router, tags=["Kubernetes应用管理"], prefix="/k8s-apps")
 v_router.include_router(file_router, tags=["文件管理"], prefix="/files")
 v_router.include_router(gpu_router, tags=["GPU监控"], prefix="/gpu")
+v_router.include_router(image_router, tags=["镜像管理"], prefix="/images")
 
 
 api_router.include_router(
