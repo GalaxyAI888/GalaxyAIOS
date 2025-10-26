@@ -234,5 +234,80 @@ class KubernetesClient:
             return self.load_yaml_from_url(yaml_source)
         else:
             return self.load_yaml_from_file(yaml_source)
+    
+    def get_pods_by_label(self, namespace: str, label_selector: str) -> Tuple[bool, str, List[str]]:
+        """
+        根据标签选择器获取Pod名称列表
+        
+        Args:
+            namespace: 命名空间
+            label_selector: 标签选择器（如 "app=nginx"）
+            
+        Returns:
+            (成功标志, 消息, Pod名称列表)
+        """
+        try:
+            pods = self.core_v1.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=label_selector
+            )
+            
+            pod_names = [pod.metadata.name for pod in pods.items]
+            logger.info(f"找到 {len(pod_names)} 个Pod: {pod_names}")
+            return True, f"找到 {len(pod_names)} 个Pod", pod_names
+            
+        except ApiException as e:
+            error_msg = f"获取Pod列表失败: {e.reason} - {e.body}"
+            logger.error(error_msg)
+            return False, error_msg, []
+        except Exception as e:
+            error_msg = f"获取Pod列表失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, []
+    
+    def get_pod_logs(self, pod_name: str, namespace: str, container_name: Optional[str] = None,
+                     tail_lines: int = 100, since_seconds: Optional[int] = None,
+                     timestamps: bool = False) -> Tuple[bool, str, str]:
+        """
+        获取Pod日志
+        
+        Args:
+            pod_name: Pod名称
+            namespace: 命名空间
+            container_name: 容器名称（可选，如果Pod中有多个容器）
+            tail_lines: 返回的日志行数
+            since_seconds: 返回自多少秒前的日志
+            timestamps: 是否包含时间戳
+            
+        Returns:
+            (成功标志, 消息, 日志内容)
+        """
+        try:
+            logs = self.core_v1.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                container=container_name,
+                tail_lines=tail_lines,
+                since_seconds=since_seconds,
+                timestamps=timestamps
+            )
+            
+            log_content = logs if logs else "（无日志输出）"
+            logger.info(f"成功获取Pod {pod_name} 的日志，共 {len(log_content)} 字符")
+            return True, "日志获取成功", log_content
+            
+        except ApiException as e:
+            if e.status == 404:
+                error_msg = f"Pod {pod_name} 不存在"
+                logger.error(error_msg)
+                return False, error_msg, ""
+            else:
+                error_msg = f"获取Pod日志失败: {e.reason} - {e.body}"
+                logger.error(error_msg)
+                return False, error_msg, ""
+        except Exception as e:
+            error_msg = f"获取Pod日志失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, ""
 
 

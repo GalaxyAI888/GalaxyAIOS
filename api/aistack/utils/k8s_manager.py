@@ -488,9 +488,34 @@ class KubernetesManager:
             (成功标志, 消息, 日志内容)
         """
         try:
-            # 这里可以实现获取Pod日志的逻辑
-            # 暂时返回占位信息
-            return True, "日志获取功能待实现", "日志内容获取功能正在开发中..."
+            # 通过标签查找Pod
+            label_selector = f"app={app_name}"
+            success, message, pod_names = self.client.get_pods_by_label(namespace, label_selector)
+            
+            if not success or not pod_names:
+                return False, f"未找到应用 {app_name} 的Pod", ""
+            
+            # 如果有多个Pod，只获取第一个Pod的日志
+            # 如果需要获取所有Pod的日志，可以在这里添加循环
+            pod_name = pod_names[0]
+            logger.info(f"获取Pod {pod_name} 的日志")
+            
+            # 获取Pod日志
+            success, message, logs = self.client.get_pod_logs(
+                pod_name=pod_name,
+                namespace=namespace,
+                container_name=container_name,
+                tail_lines=tail_lines
+            )
+            
+            if not success:
+                return False, message, ""
+            
+            # 如果有多个Pod，可以添加提示
+            if len(pod_names) > 1:
+                logs = f"（提示：应用有 {len(pod_names)} 个Pod，仅显示第一个Pod的日志）\n\n{logs}"
+            
+            return True, "日志获取成功", logs
             
         except Exception as e:
             error_msg = f"获取应用日志失败: {str(e)}"

@@ -440,6 +440,45 @@ class K8sAppService:
                         'ingress': app.ingress
                     }
             
+            # 检查应用是否已经部署
+            try:
+                dep_ok, dep_msg, dep_info = self.k8s_manager.deployment_manager.get_deployment(
+                    namespace=app_info['namespace'],
+                    deployment_name=app_info['name']
+                )
+                if dep_ok and dep_info:
+                    ready_replicas = dep_info.get("ready_replicas", 0) or 0
+                    desired_replicas = dep_info.get("replicas", 0) or 0
+                    if desired_replicas > 0 and ready_replicas == desired_replicas:
+                        logger.info(f"应用 {app_info['name']} 已经部署并就绪 ({ready_replicas}/{desired_replicas})")
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.SUCCESS, 100.0)
+                        deploy_task_manager.add_log(task_id, f"应用已部署并正常运行，无需重复部署")
+                        deploy_task_manager.set_deployment_result(task_id, {"success": True, "message": "已存在且就绪"})
+                        
+                        # 检查Service是否也已存在
+                        try:
+                            svc_ok, svc_msg, svc_info = self.k8s_manager.service_manager.get_service(
+                                namespace=app_info['namespace'],
+                                service_name=app_info['name']
+                            )
+                            if svc_ok and svc_info:
+                                deploy_task_manager.set_service_result(task_id, {"success": True, "message": "已存在"})
+                        except Exception as svc_check_e:
+                            logger.warning(f"检查Service状态失败: {svc_check_e}")
+                        
+                        # 更新应用状态
+                        engine = get_engine()
+                        async with AsyncSession(engine) as update_session:
+                            async with update_session.begin():
+                                app = await update_session.get(K8sApp, app_id)
+                                if app:
+                                    app.status = K8sAppStatusEnum.RUNNING
+                                    app.status_message = "应用已在运行"
+                                    app.last_updated_at = datetime.utcnow()
+                        return
+            except Exception as check_e:
+                logger.warning(f"检查现有Deployment状态失败，继续尝试部署: {check_e}")
+            
             # 解析JSON配置
             deploy_task_manager.update_task_status(task_id, DeployStatus.PARSING, 20.0)
             deploy_task_manager.add_log(task_id, "解析Deployment配置...")
@@ -489,35 +528,97 @@ class K8sAppService:
             
             # 部署Deployment
             if deployment_config:
-                deploy_task_manager.add_log(task_id, "部署Deployment...")
-                success, message = self.k8s_manager.deployment_manager.create_deployment_from_json(
-                    namespace=app_info['namespace'],
-                    deployment_config=deployment_config
-                )
-                if not success:
-                    error_msg = f"Deployment部署失败: {message}"
-                    deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
-                    deploy_task_manager.set_deployment_result(task_id, {"success": False, "message": message})
-                    return
-                deploy_task_manager.set_deployment_result(task_id, {"success": True, "message": message})
-                deploy_task_manager.add_log(task_id, f"Deployment部署成功: {message}")
-                deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 60.0)
+                # 检查Deployment是否已存在
+                try:
+                    # 从配置中获取Deployment名称
+                    dep_name = deployment_config.get('metadata', {}).get('name') or app_info['name']
+                    dep_ok, dep_msg, dep_info = self.k8s_manager.deployment_manager.get_deployment(
+                        namespace=app_info['namespace'],
+                        deployment_name=dep_name
+                    )
+                    if dep_ok and dep_info:
+                        logger.info(f"Deployment {dep_name} 已经存在，无需重复部署")
+                        deploy_task_manager.add_log(task_id, f"Deployment {dep_name} 已存在，跳过部署")
+                        deploy_task_manager.set_deployment_result(task_id, {"success": True, "message": "已存在，无需部署"})
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 60.0)
+                    else:
+                        # Deployment不存在，进行部署
+                        deploy_task_manager.add_log(task_id, "部署Deployment...")
+                        success, message = self.k8s_manager.deployment_manager.create_deployment_from_json(
+                            namespace=app_info['namespace'],
+                            deployment_config=deployment_config
+                        )
+                        if not success:
+                            error_msg = f"Deployment部署失败: {message}"
+                            deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
+                            deploy_task_manager.set_deployment_result(task_id, {"success": False, "message": message})
+                            return
+                        deploy_task_manager.set_deployment_result(task_id, {"success": True, "message": message})
+                        deploy_task_manager.add_log(task_id, f"Deployment部署成功: {message}")
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 60.0)
+                except Exception as dep_check_e:
+                    logger.warning(f"检查Deployment状态失败，尝试部署: {dep_check_e}")
+                    # 检查失败，尝试部署
+                    deploy_task_manager.add_log(task_id, "部署Deployment...")
+                    success, message = self.k8s_manager.deployment_manager.create_deployment_from_json(
+                        namespace=app_info['namespace'],
+                        deployment_config=deployment_config
+                    )
+                    if not success:
+                        error_msg = f"Deployment部署失败: {message}"
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
+                        deploy_task_manager.set_deployment_result(task_id, {"success": False, "message": message})
+                        return
+                    deploy_task_manager.set_deployment_result(task_id, {"success": True, "message": message})
+                    deploy_task_manager.add_log(task_id, f"Deployment部署成功: {message}")
+                    deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 60.0)
             
             # 部署Service
             if service_config:
-                deploy_task_manager.add_log(task_id, "部署Service...")
-                success, message = self.k8s_manager.service_manager.create_service_from_json(
-                    namespace=app_info['namespace'],
-                    service_config=service_config
-                )
-                if not success:
-                    error_msg = f"Service部署失败: {message}"
-                    deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
-                    deploy_task_manager.set_service_result(task_id, {"success": False, "message": message})
-                    return
-                deploy_task_manager.set_service_result(task_id, {"success": True, "message": message})
-                deploy_task_manager.add_log(task_id, f"Service部署成功: {message}")
-                deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 80.0)
+                # 检查Service是否已存在
+                try:
+                    # 从配置中获取Service名称
+                    service_name = service_config.get('metadata', {}).get('name') or app_info['name']
+                    svc_ok, svc_msg, svc_info = self.k8s_manager.service_manager.get_service(
+                        namespace=app_info['namespace'],
+                        service_name=service_name
+                    )
+                    if svc_ok and svc_info:
+                        logger.info(f"Service {service_name} 已经存在，无需重复部署")
+                        deploy_task_manager.add_log(task_id, f"Service {service_name} 已存在，跳过部署")
+                        deploy_task_manager.set_service_result(task_id, {"success": True, "message": "已存在，无需部署"})
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 80.0)
+                    else:
+                        # Service不存在，进行部署
+                        deploy_task_manager.add_log(task_id, "部署Service...")
+                        success, message = self.k8s_manager.service_manager.create_service_from_json(
+                            namespace=app_info['namespace'],
+                            service_config=service_config
+                        )
+                        if not success:
+                            error_msg = f"Service部署失败: {message}"
+                            deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
+                            deploy_task_manager.set_service_result(task_id, {"success": False, "message": message})
+                            return
+                        deploy_task_manager.set_service_result(task_id, {"success": True, "message": message})
+                        deploy_task_manager.add_log(task_id, f"Service部署成功: {message}")
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 80.0)
+                except Exception as svc_check_e:
+                    logger.warning(f"检查Service状态失败，尝试部署: {svc_check_e}")
+                    # 检查失败，尝试部署
+                    deploy_task_manager.add_log(task_id, "部署Service...")
+                    success, message = self.k8s_manager.service_manager.create_service_from_json(
+                        namespace=app_info['namespace'],
+                        service_config=service_config
+                    )
+                    if not success:
+                        error_msg = f"Service部署失败: {message}"
+                        deploy_task_manager.update_task_status(task_id, DeployStatus.FAILED, error_message=error_msg)
+                        deploy_task_manager.set_service_result(task_id, {"success": False, "message": message})
+                        return
+                    deploy_task_manager.set_service_result(task_id, {"success": True, "message": message})
+                    deploy_task_manager.add_log(task_id, f"Service部署成功: {message}")
+                    deploy_task_manager.update_task_status(task_id, DeployStatus.DEPLOYING, 80.0)
             
             # 更新应用状态
             engine = get_engine()
@@ -713,3 +814,35 @@ class K8sAppService:
         except Exception as e:
             logger.error(f"从K8s集群删除应用失败: {e}")
             return {"success": False, "message": f"删除失败: {e}"}
+    
+    async def get_app_logs(self, session: AsyncSession, app_id: int, user_id: int, 
+                          container_name: Optional[str] = None, tail_lines: int = 100) -> Dict[str, Any]:
+        """获取K8s应用日志"""
+        try:
+            # 验证应用所有权
+            has_permission, app, error_msg = await self._verify_app_ownership(session, app_id, user_id)
+            if not has_permission:
+                return {"success": False, "message": error_msg}
+            
+            # 获取K8s集群中的应用日志
+            success, message, logs = self.k8s_manager.get_app_logs(
+                app_name=app.name,
+                namespace=app.namespace,
+                container_name=container_name,
+                tail_lines=tail_lines
+            )
+            
+            if not success:
+                return {"success": False, "message": message}
+            
+            return {
+                "success": True,
+                "app_name": app.name,
+                "namespace": app.namespace,
+                "logs": logs,
+                "message": message
+            }
+       
+        except Exception as e:
+            logger.error(f"获取K8s应用日志失败: {e}")
+            return {"success": False, "message": f"获取日志失败: {e}"}

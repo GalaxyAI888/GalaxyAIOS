@@ -191,6 +191,27 @@ async def get_k8s_app_status(
         raise HTTPException(status_code=500, detail=f"获取K8s应用状态失败: {e}")
 
 
+@router.get("/{app_id}/logs", summary="获取K8s应用日志")
+async def get_k8s_app_logs(
+    app_id: int,
+    session: SessionDep,
+    current_user: DefaultTestUserDep,
+    tail_lines: int = Query(100, ge=1, le=10000, description="返回的日志行数"),
+    container_name: Optional[str] = Query(None, description="容器名称（可选，仅当Pod中有多个容器时使用）")
+):
+    """获取K8s应用运行日志"""
+    try:
+        k8s_app_service = K8sAppService()
+        result = await k8s_app_service.get_app_logs(session, app_id, current_user.id, container_name, tail_lines)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取K8s应用日志失败: {e}")
+
+
 @router.get("/tasks/{task_id}/stream", summary="实时获取部署任务状态")
 async def stream_deploy_task(task_id: str):
     """
