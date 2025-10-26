@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sd-webui1
+  labels:
+    app: sd-webui1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sd-webui1
+  template:
+    metadata:
+      labels:
+        app: sd-webui1
+    spec:
+      containers:
+      - name: sd-webui1
+        image: docker.io/library/stable-diffusion-webui-local:1.0  # ← 替换为你构建的镜像
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 7860
+        resources:
+          limits:
+            nvidia.com/gpu: 1   # 请求1块GPU
+          requests:
+            cpu: "4"
+            nvidia.com/gpu: 1
+        # command: ["/bin/sleep", "36000"]
+        command: ["/stablediffusion/webui.sh"]
+        args: ["-f", "--port", "7860", "--enable-insecure-extension-access"]
+        workingDir: /stablediffusion
+        volumeMounts:
+        - name: models
+          mountPath: /stablediffusion/models
+        - name: extensions
+          mountPath: /stablediffusion/extensions
+        - name: outputs
+          mountPath: /stablediffusion/outputs
+      volumes:
+      # 方式1：使用 PersistentVolumeClaim（推荐）
+      # - name: models
+      #  persistentVolumeClaim:
+      #    claimName: sd-models-pvc
+      # - name: extensions
+      #  persistentVolumeClaim:
+      #    claimName: sd-extensions-pvc
+      #- name: outputs
+      #  persistentVolumeClaim:
+      #    claimName: sd-outputs-pvc
+
+      # 可选：如果你用 hostPath（仅测试用，不推荐生产）
+       - name: models
+         hostPath:
+           path: /home/jincm/models 
+           type: Directory
+       - name: extensions
+         hostPath:
+           path: /mnt/d/sd/extensions
+           type: Directory
+       - name: outputs
+         hostPath:
+           path: /mnt/d/sd/outputs
+           type: Directory
+      restartPolicy: Always
