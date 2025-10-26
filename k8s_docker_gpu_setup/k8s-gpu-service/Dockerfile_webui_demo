@@ -1,0 +1,38 @@
+FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04
+
+LABEL maintainer="byteverse"
+
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV GRADIO_SERVER_NAME=0.0.0.0
+ENV GRADIO_SERVER_PORT=7860
+# ENV MODEL_LOCAL_PATH=/share/maasfile/model/public/md-sdxlweui/mdv-webuiv10/models
+
+# RUN echo "deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list && \
+#    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+#    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-backports main restricted universe multiverse" >> /etc/apt/sources.list && \
+#    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+#    sed -i 's/http:\/\/archive.ubuntu.com\/ubuntu\//http:\/\/mirrors.aliyun.com\/ubuntu\//g' /etc/apt/sources.list && \
+#    sed -i 's/http:\/\/security.ubuntu.com\/ubuntu\//http:\/\/mirrors.aliyun.com\/ubuntu\//g' /etc/apt/sources.list
+
+# 环境准备
+RUN apt update && \
+    apt install -y python3.10 python3.10-dev python3-pip curl apt-utils && \
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 && \
+    rm -rf /var/lib/apt/lists/*
+
+
+WORKDIR /stablediffusion
+
+COPY . ./
+
+# RUN python3.10 -m pip install --no-cache-dir --upgrade -r //stablediffusion/requirements.txt -i https://mirrors.huaweicloud.com/repository/pypi/simple
+RUN python3.10 -m pip install --no-cache-dir --upgrade -r //stablediffusion/requirements.txt -i https://mirrors.aliyun.com/pypi/simple
+RUN python3.10 -m pip install --no-cache-dir https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip --prefer-binary
+RUN python3.10 -m pip config set global.index-url https://mirrors.aliyun.com/pypi/simple
+# RUN python3.10 -m pip install --no-cache-dir --upgrade xformers -i https://mirrors.aliyun.com/pypi/simple
+
+RUN apt update && \
+    apt install -y git curl wget software-properties-common libgl1 xdg-utils
+
+# CMD ["/stablediffusion/webui.sh", "-f", "--xformers", "--no-hashing", "--models-dir", "/share/maasfile/model/public/md-sdxlweui/mdv-webuiv10/models"]
+CMD ["/stablediffusion/webui.sh", "-f", "--no-hashing"]
