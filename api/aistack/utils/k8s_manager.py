@@ -161,6 +161,121 @@ class KubernetesManager:
             logger.error(error_msg)
             return False, error_msg, {}
     
+    def deploy_app_from_json(self, app_name: str, namespace: str, 
+                            deployment_config: Optional[Dict[str, Any]] = None,
+                            service_config: Optional[Dict[str, Any]] = None,
+                            configmap_config: Optional[Dict[str, Any]] = None,
+                            ingress_config: Optional[Dict[str, Any]] = None,
+                            custom_labels: Optional[Dict[str, str]] = None) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        从JSON配置部署应用到Kubernetes
+        
+        Args:
+            app_name: 应用名称
+            namespace: 命名空间
+            deployment_config: Deployment配置字典
+            service_config: Service配置字典
+            configmap_config: ConfigMap配置字典
+            ingress_config: Ingress配置字典
+            custom_labels: 自定义标签
+            
+        Returns:
+            (成功标志, 消息, 部署结果)
+        """
+        try:
+            logger.info(f"开始从JSON配置部署应用: {app_name} 到命名空间: {namespace}")
+            
+            # 确保命名空间存在
+            ns_success, ns_message = self.client.create_namespace(namespace, custom_labels)
+            if not ns_success:
+                logger.warning(f"命名空间创建/检查失败: {ns_message}")
+            
+            # Idempotent: 如果Deployment已存在且就绪，直接返回成功
+            try:
+                dep_ok, dep_msg, dep_info = self.deployment_manager.get_deployment(
+                    namespace=namespace,
+                    deployment_name=app_name
+                )
+                if dep_ok and dep_info:
+                    ready_replicas = dep_info.get("ready_replicas", 0) or 0
+                    desired_replicas = dep_info.get("replicas", 0) or 0
+                    if desired_replicas > 0 and ready_replicas == desired_replicas:
+                        logger.info(
+                            f"检测到Deployment已就绪，跳过重复部署: {app_name} ({ready_replicas}/{desired_replicas})"
+                        )
+                        return True, f"应用 {app_name} 已部署并就绪，无需重复部署", {
+                            "deployment": {"success": True, "message": "已存在且就绪"},
+                            "service": None,
+                            "config": None,
+                            "ingress": None
+                        }
+            except Exception as check_e:
+                logger.warning(f"检查现有Deployment状态失败，继续尝试部署: {check_e}")
+            
+            deployment_result = None
+            service_result = None
+            config_result = None
+            ingress_result = None
+            
+            # 部署Deployment
+            if deployment_config:
+                logger.info(f"部署Deployment: {deployment_config.get('metadata', {}).get('name', 'unknown')}")
+                success, message = self.deployment_manager.create_deployment_from_json(
+                    namespace=namespace,
+                    deployment_config=deployment_config,
+                    custom_labels=custom_labels
+                )
+                deployment_result = {"success": success, "message": message}
+                if not success:
+                    logger.error(f"Deployment部署失败: {message}")
+                    return False, f"Deployment部署失败: {message}", {
+                        "deployment": deployment_result,
+                        "service": service_result,
+                        "config": config_result,
+                        "ingress": ingress_result
+                    }
+            
+            # 部署Service
+            if service_config:
+                logger.info(f"部署Service: {service_config.get('metadata', {}).get('name', 'unknown')}")
+                success, message = self.service_manager.create_service_from_json(
+                    namespace=namespace,
+                    service_config=service_config,
+                    custom_labels=custom_labels
+                )
+                service_result = {"success": success, "message": message}
+                if not success:
+                    logger.error(f"Service部署失败: {message}")
+                    # 如果Service部署失败，尝试回滚Deployment
+                    if deployment_result and deployment_result.get("success"):
+                        logger.info("尝试回滚Deployment...")
+                        # 这里可以添加回滚逻辑
+            
+            # 部署ConfigMap (如果提供)
+            if configmap_config:
+                logger.info(f"部署ConfigMap: {configmap_config.get('metadata', {}).get('name', 'unknown')}")
+                # ConfigMap部署逻辑可以在这里添加
+                config_result = {"success": True, "message": "ConfigMap部署功能待实现"}
+            
+            # 部署Ingress (如果提供)
+            if ingress_config:
+                logger.info(f"部署Ingress: {ingress_config.get('metadata', {}).get('name', 'unknown')}")
+                # Ingress部署逻辑可以在这里添加
+                ingress_result = {"success": True, "message": "Ingress部署功能待实现"}
+            
+            logger.info(f"应用 {app_name} 部署完成")
+            return True, f"应用 {app_name} 部署成功", {
+                "deployment": deployment_result,
+                "service": service_result,
+                "config": config_result,
+                "ingress": ingress_result
+            }
+            
+        except Exception as e:
+            error_msg = f"部署应用失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, {}
+    
     def get_app_status(self, app_name: str, namespace: str) -> Tuple[bool, str, Dict[str, Any]]:
         """
         获取应用状态

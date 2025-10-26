@@ -15,6 +15,72 @@ class KubernetesServiceManager:
         self.k8s_client = k8s_client
         self.core_v1 = k8s_client.core_v1
     
+    def create_service_from_json(self, namespace: str, service_config: Dict[str, Any], 
+                                custom_labels: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+        """
+        从JSON配置创建Service
+        
+        Args:
+            namespace: 命名空间
+            service_config: Service配置字典
+            custom_labels: 自定义标签
+            
+        Returns:
+            (成功标志, 消息)
+        """
+        try:
+            # 确保是Service资源
+            if service_config.get('kind') != 'Service':
+                return False, f"配置不是Service类型，当前类型: {service_config.get('kind')}"
+            
+            # 设置命名空间 - 确保覆盖任何现有的命名空间
+            if 'metadata' not in service_config:
+                service_config['metadata'] = {}
+            
+            # 记录原始命名空间（如果存在）
+            original_namespace = service_config['metadata'].get('namespace', 'None')
+            if original_namespace != namespace:
+                logger.info(f"Service命名空间将被覆盖: {original_namespace} -> {namespace}")
+            
+            # 强制设置命名空间
+            service_config['metadata']['namespace'] = namespace
+            
+            # 添加自定义标签
+            if custom_labels:
+                if 'labels' not in service_config['metadata']:
+                    service_config['metadata']['labels'] = {}
+                service_config['metadata']['labels'].update(custom_labels)
+            
+            # 自动添加app标签：从service的selector中获取app标签
+            if 'labels' not in service_config['metadata']:
+                service_config['metadata']['labels'] = {}
+            if 'spec' in service_config and 'selector' in service_config['spec']:
+                selector = service_config['spec']['selector']
+                if 'app' in selector:
+                    # 如果selector中有app标签，也将其添加到metadata的labels中
+                    service_config['metadata']['labels']['app'] = selector['app']
+            
+            # 使用官方方法：直接应用JSON配置
+            logger.info(f"使用官方方法应用Service JSON配置到命名空间: {namespace}")
+            utils.create_from_dict(
+                self.k8s_client.core_v1.api_client,
+                service_config,
+                namespace=namespace,
+                verbose=True
+            )
+            
+            logger.info(f"Service创建成功: {service_config['metadata']['name']} in {namespace}")
+            return True, f"Service {service_config['metadata']['name']} 创建成功"
+            
+        except ApiException as e:
+            error_msg = f"创建Service失败: {e.reason} - {e.body}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"创建Service失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
     def create_service_from_yaml(self, namespace: str, yaml_source: str, 
                                 custom_labels: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
         """
@@ -47,6 +113,15 @@ class KubernetesServiceManager:
                 if 'labels' not in yaml_data['metadata']:
                     yaml_data['metadata']['labels'] = {}
                 yaml_data['metadata']['labels'].update(custom_labels)
+            
+            # 自动添加app标签：从service的selector中获取app标签
+            if 'labels' not in yaml_data['metadata']:
+                yaml_data['metadata']['labels'] = {}
+            if 'spec' in yaml_data and 'selector' in yaml_data['spec']:
+                selector = yaml_data['spec']['selector']
+                if 'app' in selector:
+                    # 如果selector中有app标签，也将其添加到metadata的labels中
+                    yaml_data['metadata']['labels']['app'] = selector['app']
             
             # 使用官方方法：直接应用YAML
             logger.info(f"使用官方方法应用Service YAML到命名空间: {namespace}")

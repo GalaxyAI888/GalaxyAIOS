@@ -59,6 +59,7 @@ class User(UserBase, BaseModelMixin, table=True):
     
     # 关联应用
     apps: List["App"] = Relationship(back_populates="user")
+    k8s_apps: List["K8sApp"] = Relationship(back_populates="user")
 
 
 class UserPublic(UserBase):

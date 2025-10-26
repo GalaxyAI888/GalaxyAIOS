@@ -80,6 +80,73 @@ class KubernetesDeploymentManager:
             logger.error(error_msg)
             return False, error_msg
     
+    def create_deployment_from_json(self, namespace: str, deployment_config: Dict[str, Any], 
+                                   custom_labels: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+        """
+        从JSON配置创建Deployment
+        
+        Args:
+            namespace: 命名空间
+            deployment_config: Deployment配置字典
+            custom_labels: 自定义标签
+            
+        Returns:
+            (成功标志, 消息)
+        """
+        try:
+            # 确保是Deployment资源
+            if deployment_config.get('kind') != 'Deployment':
+                return False, f"配置不是Deployment类型，当前类型: {deployment_config.get('kind')}"
+            
+            # 设置命名空间 - 确保覆盖任何现有的命名空间
+            if 'metadata' not in deployment_config:
+                deployment_config['metadata'] = {}
+            
+            # 记录原始命名空间（如果存在）
+            original_namespace = deployment_config['metadata'].get('namespace', 'None')
+            if original_namespace != namespace:
+                logger.info(f"Deployment命名空间将被覆盖: {original_namespace} -> {namespace}")
+            
+            # 强制设置命名空间
+            deployment_config['metadata']['namespace'] = namespace
+            
+            # 添加自定义标签（避免覆盖 YAML 的 app/selector 标签）
+            if custom_labels:
+                # 过滤掉 app 键，防止与 Service selector 冲突
+                safe_labels = {k: v for k, v in custom_labels.items() if k != 'app'}
+                if safe_labels:
+                    if 'labels' not in deployment_config['metadata']:
+                        deployment_config['metadata']['labels'] = {}
+                    deployment_config['metadata']['labels'].update(safe_labels)
+                    # 仅追加到 Pod 模板标签，不触碰 spec.selector.matchLabels
+                    if 'spec' in deployment_config and 'template' in deployment_config['spec']:
+                        if 'metadata' not in deployment_config['spec']['template']:
+                            deployment_config['spec']['template']['metadata'] = {}
+                        if 'labels' not in deployment_config['spec']['template']['metadata']:
+                            deployment_config['spec']['template']['metadata']['labels'] = {}
+                        deployment_config['spec']['template']['metadata']['labels'].update(safe_labels)
+            
+            # 使用官方方法：直接应用JSON配置
+            logger.info(f"使用官方方法应用JSON配置到命名空间: {namespace}")
+            utils.create_from_dict(
+                self.k8s_client.apps_v1.api_client,
+                deployment_config,
+                namespace=namespace,
+                verbose=True
+            )
+            
+            logger.info(f"Deployment创建成功: {deployment_config['metadata']['name']} in {namespace}")
+            return True, f"Deployment {deployment_config['metadata']['name']} 创建成功"
+            
+        except ApiException as e:
+            error_msg = f"创建Deployment失败: {e.reason} - {e.body}"
+            logger.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"创建Deployment失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
     def update_deployment_from_yaml(self, namespace: str, deployment_name: str, 
                                    yaml_source: str) -> Tuple[bool, str]:
         """

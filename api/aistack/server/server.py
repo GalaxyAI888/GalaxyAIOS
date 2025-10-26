@@ -88,6 +88,7 @@ class Server(object):
                 import aistack.schemas.model_files
                 import aistack.schemas.preset_models
                 import aistack.schemas.workers
+                import aistack.schemas.k8s_apps  # 确保K8s应用表被创建
                 
                 engine = create_engine(self._config.database_url)
                 SQLModel.metadata.create_all(engine)
