@@ -5,6 +5,7 @@ import glob
 from itertools import chain
 import logging
 import os
+import re
 import time
 from typing import Dict, Tuple
 from multiprocessing import Manager, cpu_count
@@ -13,6 +14,7 @@ from multiprocessing import Manager, cpu_count
 from aistack.config.config import Config
 from aistack.log import setup_logging
 from aistack.schemas.model_files import ModelFile, ModelFileUpdate, ModelFileStateEnum
+from aistack.schemas.models import SourceEnum
 from aistack.client import ClientSet
 from aistack.server.bus import Event, EventType
 from aistack.utils.file import delete_path
@@ -87,19 +89,58 @@ class ModelFileManager:
         entry = self._active_downloads.pop(model_file.id, None)
         if entry:
             future, cancel_flag = entry
+            logger.info(
+                f"Requesting cancellation for deleted model: {model_file.readable_source}(id: {model_file.id})"
+            )
             cancel_flag.set()
-            future.cancel()
-            try:
-                await future
-            except asyncio.CancelledError:
-                pass
-            finally:
-                logger.info(
-                    f"Cancelled download for deleted model: {model_file.readable_source}(id: {model_file.id})"
-                )
+            
+            # 尝试取消 future（只对尚未开始的任务有效）
+            if future.cancel():
+                logger.info(f"Download task cancelled before starting: {model_file.readable_source}")
+            else:
+                logger.info(f"Download task already running, waiting for completion: {model_file.readable_source}")
+                # 对于已经在运行的下载，我们需要等待它完成或中断
+                try:
+                    # 等待一小段时间看是否会被检查点中断
+                    await asyncio.wait_for(asyncio.wrap_future(future), timeout=5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Download still running after 5s, may need manual cleanup: {model_file.readable_source}")
+                except Exception as e:
+                    logger.debug(f"Future completed with error: {e}")
+            
+            # 清理已下载的文件（如果存在）
+            if model_file.local_dir or model_file.resolved_paths:
+                await self._cleanup_orphaned_files(model_file)
 
         if model_file.cleanup_on_delete:
             await self._delete_model_file(model_file)
+    
+    async def _cleanup_orphaned_files(self, model_file: ModelFile):
+        """清理因取消下载而残留的文件"""
+        try:
+            # 清理本地目录
+            if model_file.local_dir and os.path.exists(model_file.local_dir):
+                import shutil
+                shutil.rmtree(model_file.local_dir, ignore_errors=True)
+                logger.info(f"Cleaned up local directory: {model_file.local_dir}")
+            
+            # 清理缓存目录中的临时文件
+            if hasattr(model_file, 'source') and model_file.source == SourceEnum.OLLAMA_LIBRARY.value:
+                if hasattr(model_file, 'ollama_library_model_name') and model_file.ollama_library_model_name:
+                    sanitized_name = re.sub(r"[^a-zA-Z0-9]", "_", model_file.ollama_library_model_name)
+                    model_path = os.path.join(self._config.cache_dir, "ollama", sanitized_name)
+                    # 清理临时文件
+                    temp_file = model_path + ".part"
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                        logger.info(f"Cleaned up temp file: {temp_file}")
+                    # 清理模型文件（如果存在）
+                    if os.path.exists(model_path):
+                        os.remove(model_path)
+                        logger.info(f"Cleaned up model file: {model_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cleanup orphaned files: {e}")
 
     async def _delete_model_file(self, model_file: ModelFile):
         try:
@@ -278,13 +319,24 @@ class ModelFileDownloadTask:
     def _download_model_file(self):
         logger.info(f"Starting download of model file: {self._model_file.readable_source}")
         try:
+            # 检查是否已被取消
+            if self._cancel_flag.is_set():
+                logger.info(f"Download cancelled before starting: {self._model_file.readable_source}")
+                raise Exception("Download cancelled")
+            
             model_paths = downloaders.download_model(
                 self._model_file,
                 local_dir=self._model_file.local_dir,
                 cache_dir=self._config.cache_dir,
                 ollama_library_base_url=self._config.ollama_library_base_url,
                 huggingface_token=self._config.huggingface_token,
+                cancel_flag=self._cancel_flag,
             )
+            
+            # 再次检查是否已被取消（下载期间可能被取消）
+            if self._cancel_flag.is_set():
+                logger.info(f"Download cancelled after completion: {self._model_file.readable_source}")
+                raise Exception("Download cancelled")
             
             # 更新模型文件状态为完成
             self._update_model_file(
@@ -298,8 +350,34 @@ class ModelFileDownloadTask:
             logger.info(f"📁 Downloaded files: {model_paths}")
             
         except Exception as e:
+            # 如果被取消，删除已下载的文件
+            if self._cancel_flag.is_set():
+                logger.info(f"Cleaning up cancelled download files for: {self._model_file.readable_source}")
+                self._cleanup_downloaded_files()
             logger.error(f"❌ Download failed for {self._model_file.readable_source}: {e}")
             raise
+    
+    def _cleanup_downloaded_files(self):
+        """清理已下载的文件"""
+        try:
+            # 清理本地目录
+            if self._model_file.local_dir and os.path.exists(self._model_file.local_dir):
+                import shutil
+                shutil.rmtree(self._model_file.local_dir, ignore_errors=True)
+                logger.info(f"Cleaned up local directory: {self._model_file.local_dir}")
+            
+            # 清理缓存目录中的临时文件
+            cache_dir = self._config.cache_dir
+            if self._model_file.source == "ollama_library" and self._model_file.ollama_library_model_name:
+                sanitized_name = re.sub(r"[^a-zA-Z0-9]", "_", self._model_file.ollama_library_model_name)
+                model_path = os.path.join(cache_dir, "ollama", sanitized_name)
+                temp_file = model_path + ".part"
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"Cleaned up temp file: {temp_file}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to cleanup files: {e}")
 
     def hijack_tqdm_progress(task_self):
         """

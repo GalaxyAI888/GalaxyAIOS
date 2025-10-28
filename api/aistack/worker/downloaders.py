@@ -38,6 +38,7 @@ def download_model(
     cache_dir: Optional[str] = None,
     ollama_library_base_url: Optional[str] = None,
     huggingface_token: Optional[str] = None,
+    cancel_flag=None,
 ) -> List[str]:
     if model.source == SourceEnum.HUGGING_FACE:
         return HfDownloader.download(
@@ -47,10 +48,12 @@ def download_model(
             token=huggingface_token,
             local_dir=local_dir,
             cache_dir=os.path.join(cache_dir, "huggingface"),
+            cancel_flag=cancel_flag,
         )
     elif model.source == SourceEnum.OLLAMA_LIBRARY:
         ollama_downloader = OllamaLibraryDownloader(
-            registry_url=ollama_library_base_url
+            registry_url=ollama_library_base_url,
+            cancel_flag=cancel_flag,
         )
         return ollama_downloader.download(
             model_name=model.ollama_library_model_name,
@@ -64,6 +67,7 @@ def download_model(
             extra_file_path=get_mmproj_filename(model),
             local_dir=local_dir,
             cache_dir=os.path.join(cache_dir, "model_scope"),
+            cancel_flag=cancel_flag,
         )
     elif model.source == SourceEnum.LOCAL_PATH:
         return file.get_sharded_file_paths(model.local_path)
@@ -151,6 +155,7 @@ class HfDownloader:
         local_dir: Optional[Union[str, os.PathLike[str]]] = None,
         cache_dir: Optional[Union[str, os.PathLike[str]]] = None,
         max_workers: int = 8,
+        cancel_flag=None,
     ) -> List[str]:
         """Download a model from the Hugging Face Hub.
 
@@ -188,6 +193,7 @@ class HfDownloader:
                     token=token,
                     local_dir=local_dir,
                     extra_filename=extra_filename,
+                    cancel_flag=cancel_flag,
                 )
 
             snapshot_download(
@@ -206,6 +212,7 @@ class HfDownloader:
         local_dir: Optional[Union[str, os.PathLike[str]]] = None,
         max_workers: int = 8,
         extra_filename: Optional[str] = None,
+        cancel_flag=None,
     ) -> List[str]:
         """Download a model from the Hugging Face Hub.
         Args:
@@ -217,6 +224,10 @@ class HfDownloader:
         Returns:
             The path to the downloaded model.
         """
+
+        # 检查是否已被取消
+        if cancel_flag and cancel_flag.is_set():
+            raise Exception("Download cancelled")
 
         matching_files = match_hugging_face_files(
             repo_id, filename, extra_filename, token
@@ -237,6 +248,9 @@ class HfDownloader:
         downloaded_files = []
 
         def _inner_hf_hub_download(repo_file: str):
+            # 检查是否已被取消
+            if cancel_flag and cancel_flag.is_set():
+                raise Exception("Download cancelled")
             downloaded_file = hf_hub_download(
                 repo_id=repo_id,
                 filename=repo_file,
@@ -252,6 +266,10 @@ class HfDownloader:
             desc=f"Fetching {len(unfolder_matching_files)} files",
             max_workers=max_workers,
         )
+        
+        # 再次检查是否被取消
+        if cancel_flag and cancel_flag.is_set():
+            raise Exception("Download cancelled")
 
         logger.info(f"Downloaded model {repo_id}/{filename}")
         return sorted(downloaded_files)
@@ -273,8 +291,10 @@ class OllamaLibraryDownloader:
     def __init__(
         self,
         registry_url: Optional[str] = "https://registry.ollama.ai",
+        cancel_flag=None,
     ):
         self._registry_url = registry_url
+        self._cancel_flag = cancel_flag
 
     def download_blob(
         self, url: str, registry_token: str, filename: str, _nb_retries: int = 5
@@ -291,6 +311,10 @@ class OllamaLibraryDownloader:
             headers["Range"] = f"bytes={existing_file_size}-"
         else:
             existing_file_size = 0
+
+        # 检查是否已被取消
+        if self._cancel_flag and self._cancel_flag.is_set():
+            raise Exception("Download cancelled")
 
         response = requests.get(url, headers=headers, stream=True)
         total_size = int(response.headers.get("content-length", 0)) + existing_file_size
@@ -310,12 +334,24 @@ class OllamaLibraryDownloader:
         ):
             try:
                 for chunk in response.iter_content(chunk_size=chunk_size):
+                    # 检查是否已被取消
+                    if self._cancel_flag and self._cancel_flag.is_set():
+                        logger.info("Download cancelled during chunk writing")
+                        # 删除临时文件
+                        if os.path.exists(temp_filename):
+                            os.remove(temp_filename)
+                        raise Exception("Download cancelled")
+                    
                     if chunk:
                         file.write(chunk)
                         bar.update(len(chunk))
 
                         _nb_retries = 5
             except Exception as e:
+                # 如果是取消异常，直接抛出
+                if self._cancel_flag and self._cancel_flag.is_set():
+                    raise
+                    
                 if _nb_retries <= 0:
                     logger.warning(
                         "Error while downloading model: %s\nMax retries exceeded.",
@@ -330,6 +366,14 @@ class OllamaLibraryDownloader:
                 return self.download_blob(
                     url, registry_token, filename, _nb_retries - 1
                 )
+        
+        # 再次检查是否被取消
+        if self._cancel_flag and self._cancel_flag.is_set():
+            logger.info("Download cancelled before file rename")
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+            raise Exception("Download cancelled")
+            
         os.rename(temp_filename, filename)
 
     def download(
@@ -608,6 +652,7 @@ class ModelScopeDownloader:
         extra_file_path: Optional[str],
         local_dir: Optional[Union[str, os.PathLike[str]]] = None,
         cache_dir: Optional[Union[str, os.PathLike[str]]] = None,
+        cancel_flag=None,
     ) -> List[str]:
         """Download a model from Model Scope.
 
@@ -629,6 +674,10 @@ class ModelScopeDownloader:
         if local_dir is None:
             local_dir = os.path.join(cache_dir, group_or_owner, name)
 
+        # 检查是否已被取消
+        if cancel_flag and cancel_flag.is_set():
+            raise Exception("Download cancelled")
+
         logger.info(f"Retriving file lock: {lock_filename}")
         with SoftFileLock(lock_filename):
             if file_path:
@@ -645,10 +694,20 @@ class ModelScopeDownloader:
                     local_dir=local_dir,
                     allow_patterns=matching_files,
                 )
+                
+                # 再次检查是否被取消
+                if cancel_flag and cancel_flag.is_set():
+                    raise Exception("Download cancelled")
+                    
                 return [os.path.join(model_dir, file) for file in matching_files]
 
             modelscope_snapshot_download(
                 model_id=model_id,
                 local_dir=local_dir,
             )
+            
+            # 再次检查是否被取消
+            if cancel_flag and cancel_flag.is_set():
+                raise Exception("Download cancelled")
+                
             return [local_dir]
