@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # 脚本：在Ubuntu 24.04上自动化安装dockerd、nvidia-container-toolkit、k3s和nvidia-device-plugin
 # 作者：AI Assistant
@@ -47,6 +47,63 @@ check_nvidia_driver() {
         ufw disable
     else
         echo_warning "NVIDIA驱动未安装或不可用，脚本终止"
+    fi
+}
+
+# 安装Python开发环境和必要的构建工具
+install_python_dev() {
+    echo_info "安装Python开发环境和必要的构建工具..."
+    
+    # 检测Python版本
+    local python_version="python3"
+    if command -v python3.12 >/dev/null 2>&1; then
+        python_version="python3.12"
+        echo_info "检测到Python 3.12"
+    elif command -v python3.11 >/dev/null 2>&1; then
+        python_version="python3.11"
+        echo_info "检测到Python 3.11"
+    else
+        # 尝试安装Python 3.12
+        sudo apt install -y python3.12 python3.12-venv
+        if command -v python3.12 >/dev/null 2>&1; then
+            python_version="python3.12"
+        fi
+    fi
+    
+    # 根据检测到的Python版本安装对应的包
+    local python_major_minor=$(echo $python_version | sed 's/python//')
+    local python_dev_pkg="python${python_major_minor}-dev python${python_major_minor}-venv"
+    
+    # 安装必要的包
+    sudo apt install -y python3-pip build-essential $python_dev_pkg
+    
+    if [ $? -eq 0 ]; then
+        echo_success "Python开发环境和构建工具安装成功"
+        echo_info "已安装：$python_version, python3-pip, build-essential, $python_dev_pkg"
+        
+        # 配置pip使用国内镜像源
+        echo_info "配置pip使用国内镜像源..."
+        if [ -n "$SUDO_USER" ]; then
+            # 为使用sudo的用户配置pip镜像
+            sudo mkdir -p /home/$SUDO_USER/.pip
+            sudo bash -c "cat > /home/$SUDO_USER/.pip/pip.conf << 'EOF'
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+trusted-host = pypi.tuna.tsinghua.edu.cn
+EOF"
+            sudo chown $SUDO_USER:$SUDO_USER /home/$SUDO_USER/.pip/pip.conf
+        else
+            # 为当前用户配置pip镜像
+            mkdir -p ~/.pip
+            cat > ~/.pip/pip.conf << 'EOF'
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+trusted-host = pypi.tuna.tsinghua.edu.cn
+EOF
+        fi
+        echo_success "pip已配置使用清华大学镜像源"
+    else
+        echo_warning "Python开发环境安装失败，但继续执行脚本"
     fi
 }
 
@@ -200,9 +257,25 @@ install_docker() {
     curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://mirrors.aliyun.com/docker-ce/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
 
+    # 更新包列表，不然docker-ce安装失败，因为docker-ce的源没有更新
+    sudo apt update
+    
     sudo apt install -y docker-ce docker-ce-cli containerd.io
     if [ $? -eq 0 ]; then
         echo_success "Docker安装成功"
+        
+        # 将当前用户添加到docker组，以便普通用户可以使用docker命令
+        if [ -n "$SUDO_USER" ]; then
+            # 如果使用sudo运行，添加使用sudo的用户到docker组
+            sudo usermod -aG docker $SUDO_USER
+            echo_success "已将用户 $SUDO_USER 添加到 docker 组"
+            echo_warning "注意：需要重新登录或运行 'newgrp docker' 才能使组成员生效"
+        elif [ "$(id -u)" -ne 0 ]; then
+            # 如果不是root且没有SUDO_USER，添加当前用户
+            sudo usermod -aG docker $USER
+            echo_success "已将用户 $USER 添加到 docker 组"
+            echo_warning "注意：需要重新登录或运行 'newgrp docker' 才能使组成员生效"
+        fi
         
         # 配置Docker加速和使用systemd驱动
         sudo mkdir -p /etc/docker
@@ -277,25 +350,53 @@ install_nvidia_container_toolkit() {
 install_k3s() {
     echo_info "安装K3s并配置加速..."
     
-    # 设置K3s安装参数，使用Docker作为容器运行时并配置镜像加速# 安装K3s并配置加速
+    # 设置K3s安装参数，使用Docker作为容器运行时并配置镜像加速
     export INSTALL_K3S_EXEC="--kubelet-arg=image-gc-high-threshold=80 --kubelet-arg=image-gc-low-threshold=70"
     export K3S_IMAGE_REPO="docker.m.daocloud.io"
     
-    # 安装K3s
-    # curl -sfL https://get.k3s.io | sudo sh -s - --docker 
-    curl -sfL https://rancher-mirror.rancher.cn/k3s/k3s-install.sh | INSTALL_K3S_MIRROR=cn sh -s - --docker
+    # 安装K3s - 尝试多个镜像源
+    echo_info "尝试从国内镜像源安装K3s..."
     
-    if [ $? -eq 0 ]; then
+    local install_success=false
+    
+    # 尝试1: rancher-mirror (推荐)
+    if curl -sfL https://rancher-mirror.rancher.cn/k3s/k3s-install.sh | INSTALL_K3S_MIRROR=cn sh -s - --docker 2>/dev/null; then
+        echo_success "从 rancher-mirror 安装成功"
+        install_success=true
+    else
+        echo_warning "rancher-mirror 连接失败，尝试备用源..."
+        
+        # 尝试2: get.rancher.io
+        if curl -sfL https://get.rancher.io/k3s/k3s-install.sh | sh -s - --docker 2>/dev/null; then
+            echo_success "从 get.rancher.io 安装成功"
+            install_success=true
+        else
+            echo_warning "get.rancher.io 连接失败，尝试官方源..."
+            
+            # 尝试3: 官方源
+            if curl -sfL https://get.k3s.io | sh -s - --docker 2>/dev/null; then
+                echo_success "从官方源安装成功"
+                install_success=true
+            else
+                echo_error "所有镜像源都连接失败，请检查网络连接"
+            fi
+        fi
+    fi
+    
+    if [ "$install_success" = "true" ]; then
         echo_success "K3s安装成功，使用Docker作为容器运行时"
         
         # 配置kubectl命令行工具
         mkdir -p ~/.kube
         sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-        sudo chmod +r ~/.kube/config
+        # 确保配置文件归当前用户所有，以便普通用户可以使用
+        sudo chown $(id -u):$(id -g) ~/.kube/config
+        chmod 600 ~/.kube/config
         
         echo_info "已配置kubectl命令行工具"
+        echo_info "现在可以使用 kubectl 命令（无需 sudo）"
         # export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-        kubectl --kubeconfig ~/.kube/config get pods --all-namespaces
+        kubectl get pods --all-namespaces 2>/dev/null || true
         # 显示K3s状态
         # systemctl status k3s
     else
@@ -307,17 +408,40 @@ install_k3s() {
 install_nvidia_device_plugin() {
     echo_info "安装NVIDIA Device Plugin..."
     
-    # 应用NVIDIA Device Plugin指定版本(0.17.4)的YAML配置
-    sudo kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.4/deployments/static/nvidia-device-plugin.yml
+    local install_success=false
+    
+    # 尝试从GitHub安装NVIDIA Device Plugin指定版本(0.17.4)
+    if sudo kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.4/deployments/static/nvidia-device-plugin.yml 2>/dev/null; then
+        echo_success "从 GitHub 安装成功"
+        install_success=true
+    else
+        echo_warning "GitHub 连接失败，尝试使用 ghproxy 镜像..."
+        
+        # 尝试从ghproxy镜像安装
+        if sudo kubectl create -f https://ghproxy.com/https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.4/deployments/static/nvidia-device-plugin.yml 2>/dev/null; then
+            echo_success "从 ghproxy 镜像安装成功"
+            install_success=true
+        else
+            echo_warning "ghproxy 镜像连接失败，尝试使用 fastgit 镜像..."
+            
+            # 尝试从fastgit镜像安装
+            if sudo kubectl create -f https://raw.fastgit.org/NVIDIA/k8s-device-plugin/v0.17.4/deployments/static/nvidia-device-plugin.yml 2>/dev/null; then
+                echo_success "从 fastgit 镜像安装成功"
+                install_success=true
+            else
+                echo_error "所有镜像源都连接失败"
+            fi
+        fi
+    fi
 
-    if [ $? -eq 0 ]; then
+    if [ "$install_success" = "true" ]; then
         echo_success "NVIDIA Device Plugin安装成功"
         
         # 等待插件部署完成
         echo_info "等待NVIDIA Device Plugin部署完成（可能需要几分钟）..."
         sleep 60
-        sudo kubectl get pods -n kube-system | grep nvidia-device-plugin
-        sudo kubectl label nodes $(hostname) nvidia.com/gpu.present=true
+        sudo kubectl get pods -n kube-system | grep nvidia-device-plugin || true
+        sudo kubectl label nodes $(hostname) nvidia.com/gpu.present=true 2>/dev/null || true
     else
         echo_warning "NVIDIA Device Plugin安装失败"
     fi
@@ -429,6 +553,7 @@ main() {
             # 执行安装流程
             check_nvidia_driver
             change_to_aliyun_source
+            install_python_dev
             disable_swap_permanently
             set_shared_mount
             install_docker
@@ -452,6 +577,7 @@ main() {
             check_root
             check_nvidia_driver
             change_to_aliyun_source
+            install_python_dev
             disable_swap_permanently
             set_shared_mount
             install_docker

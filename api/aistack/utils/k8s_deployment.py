@@ -581,5 +581,16 @@ class KubernetesDeploymentManager:
                 volumes.append(volume)
             pod_spec.volumes = volumes
         
+        # 支持所有其他 pod spec 字段
+        # 注意：_dict_to_pod_spec 主要用于 update 操作，create 操作直接使用 create_from_dict
+        # 通过 Python 的 setattr 动态设置所有未处理字段，以支持 Kubernetes 的所有特性
+        for key, value in pod_spec_data.items():
+            if key not in ['containers', 'volumes']:
+                if hasattr(pod_spec, key):
+                    try:
+                        setattr(pod_spec, key, value)
+                    except Exception as e:
+                        logger.warning(f"无法设置 pod_spec.{key}: {e}")
+        
         return pod_spec
 
