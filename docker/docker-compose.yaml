@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # API服务
+  api:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    image: galaxyaios/api:latest
+    container_name: galaxyaios-api
+    restart: always
+    ports:
+      - "9999:9999"
+    volumes:
+      - ../api:/app
+      - api_data:/app/data
+      - api_cache:/app/cache
+      - api_logs:/app/logs
+    environment:
+      - AISTACK_DATA_DIR=/app/data
+      - AISTACK_CACHE_DIR=/app/cache
+      - AISTACK_DATABASE_URL=postgresql://postgres:postgres@db:5432/galaxyaios
+      - AISTACK_DEBUG=true
+    depends_on:
+      - db
+    networks:
+      - galaxyaios-network
+
+  # Web前端
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: galaxyaios/web:latest
+    container_name: galaxyaios-web
+    restart: always
+    ports:
+      - "12888:80"
+    volumes:
+      - ../web:/app
+    environment:
+      - API_URL=http://api:9999
+    depends_on:
+      - api
+    networks:
+      - galaxyaios-network
+
+  # 数据库
+  db:
+    image: postgres:14-alpine
+    container_name: galaxyaios-db
+    restart: always
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=galaxyaios
+    networks:
+      - galaxyaios-network
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: galaxyaios-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - galaxyaios-network
+
+  # 集群管理服务
+  cluster-manager:
+    build:
+      context: ../api
+      dockerfile: Dockerfile.cluster
+    image: galaxyaios/cluster-manager:latest
+    container_name: galaxyaios-cluster-manager
+    restart: always
+    privileged: true  # 需要特权模式来管理集群
+    volumes:
+      - /etc/kubeedge:/etc/kubeedge
+      - /var/lib/kubeedge:/var/lib/kubeedge
+      - /etc/cni:/etc/cni
+      - /opt/cni:/opt/cni
+      - /usr/bin:/usr/bin:ro
+      - ../api/aistack/scripts:/scripts
+    environment:
+      - AISTACK_API_URL=http://api:9999
+    depends_on:
+      - api
+    networks:
+      - galaxyaios-network
+      - host-network
+
+  # 日志收集服务
+  log-collector:
+    image: fluent/fluent-bit:1.9
+    container_name: galaxyaios-log-collector
+    restart: always
+    volumes:
+      - ../api/logs:/logs
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+    depends_on:
+      - api
+    networks:
+      - galaxyaios-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_data:
+  api_cache:
+  api_logs:
+
+networks:
+  galaxyaios-network:
+    driver: bridge
+  host-network:
+    driver: host

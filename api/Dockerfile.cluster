@@ -1,0 +1,37 @@
+FROM ubuntu:20.04
+
+WORKDIR /app
+
+# 避免交互式提示
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    sudo \
+    systemd \
+    socat \
+    conntrack \
+    ebtables \
+    ipset \
+    containerd \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建必要的目录
+RUN mkdir -p /scripts /logs
+
+# 复制脚本
+COPY aistack/scripts/joincluster.sh /scripts/
+COPY aistack/scripts/leavecluster.sh /scripts/
+
+# 设置脚本权限
+RUN chmod +x /scripts/*.sh
+
+# 设置工作目录
+WORKDIR /scripts
+
+# 启动命令（保持容器运行）
+CMD ["tail", "-f", "/dev/null"] 
