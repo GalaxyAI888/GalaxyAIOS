@@ -8,6 +8,7 @@ from aistack.api.model_file_routes import router as model_file_router
 from aistack.api.preset_model_routes import router as preset_model_router
 from aistack.api.app_routes import router as app_router
 from aistack.api.file_routes import router as file_router
+from aistack.api.cluster_routes import router as cluster_router
 
 
 
@@ -22,6 +23,7 @@ v_router.include_router(model_file_router, tags=["Model Files"],prefix="/model-f
 v_router.include_router(preset_model_router, tags=["Preset Models"], prefix="/preset-models")
 v_router.include_router(app_router, tags=["应用管理"], prefix="/apps")
 v_router.include_router(file_router, tags=["文件管理"], prefix="/files")
+v_router.include_router(cluster_router, tags=["集群管理"], prefix="/cluster")
 
 
 api_router.include_router(
