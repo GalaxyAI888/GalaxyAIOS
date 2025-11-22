@@ -139,7 +139,7 @@ print(completion.choices[0].message)
 
 ## 参与贡献
 
-欢迎参与贡献代码。
+欢迎参与贡献代码：https://github.com/GalaxyAI888/GalaxyAIOS.git
 
 ## 加入社区
 
