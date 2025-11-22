@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 
 # 脚本：在Ubuntu 24.04上自动化安装dockerd、nvidia-container-toolkit、k3s和nvidia-device-plugin
-# 作者：AI Assistant
-# 日期：$(date +'%Y-%m-%d')
 
 # wsl --install -d Ubuntu-24.04 --name Ubuntu24-AINode
 # wsl --list --online
 # wsl -d Ubuntu24-AINode
-# sudo bash -x ./setup_nvidia_k3s.sh
+# ./setup_nvidia_k3s.sh
 
 # 设置颜色变量
 RED='\033[0;31m'
@@ -44,7 +42,7 @@ check_nvidia_driver() {
     if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --version >/dev/null 2>&1; then
         echo_success "NVIDIA驱动已安装，输出nvidia-smi信息："
         nvidia-smi
-        ufw disable
+        # ufw disable
     else
         echo_warning "NVIDIA驱动未安装或不可用，脚本终止"
     fi
@@ -122,8 +120,8 @@ change_to_aliyun_source() {
 # Ubuntu 24.04 (Noble Numbat) 阿里云源
 deb http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse
 deb-src http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse
-deb http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
-deb-src http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
+# deb http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
+# deb-src http://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse
 deb http://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse
 deb-src http://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse
 deb http://mirrors.aliyun.com/ubuntu/ noble-proposed main restricted universe multiverse
@@ -253,6 +251,7 @@ install_docker() {
     # sudo apt update
     # sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     
+    sudo rm -rf /usr/share/keyrings/docker-archive-keyring.gpg
     sudo apt-get install apt-transport-https ca-certificates curl gnupg-agent software-properties-common -y
     curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://mirrors.aliyun.com/docker-ce/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
@@ -306,6 +305,7 @@ install_nvidia_container_toolkit() {
     #     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     #     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
     
+    sudo rm -rf /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
@@ -410,6 +410,9 @@ install_nvidia_device_plugin() {
     
     local install_success=false
     
+    # 判断nvidia-device-plugin 如果已经存在则不安装
+    
+    sudo kubectl get pods -n kube-system | grep nvidia-device-plugin || true
     # 尝试从GitHub安装NVIDIA Device Plugin指定版本(0.17.4)
     if sudo kubectl create -f nvidia-device-plugin.yml 2>/dev/null; then
         echo_success "从 Local 安装成功"
@@ -429,7 +432,7 @@ install_nvidia_device_plugin() {
                 echo_success "从 gitee 镜像安装成功"
                 install_success=true
             else
-                echo_error "所有镜像源都连接失败"
+                echo_warning "所有镜像源都连接失败"
             fi
         fi
     fi
@@ -574,7 +577,7 @@ main() {
             # 默认执行安装流程
             # git config --global url."https://gitclone.com/".insteadOf https://
             # git config --global --unset url."https://gitclone.com/".insteadOf
-            check_root
+            # check_root
             check_nvidia_driver
             change_to_aliyun_source
             install_python_dev
