@@ -69,3 +69,5 @@ web/
 # JWT and secrets
 api/aistack/data/jwt_secret_key
 api/aistack/data/token 
+*.pyc
+__pycache__/

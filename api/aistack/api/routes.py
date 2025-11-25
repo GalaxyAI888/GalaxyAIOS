@@ -12,6 +12,7 @@ from aistack.api.file_routes import router as file_router
 
 from aistack.api.gpu_routes import router as gpu_router
 from aistack.api.image_routes import router as image_router
+from aistack.api.cluster_routes import router as cluster_router
 
 
 
@@ -27,8 +28,6 @@ v_router.include_router(preset_model_router, tags=["Preset Models"], prefix="/pr
 # v_router.include_router(app_router, tags=["应用管理"], prefix="/apps")  # 已屏蔽Docker应用管理，改用K8s
 v_router.include_router(k8s_app_router, tags=["K8s应用管理"])
 v_router.include_router(file_router, tags=["文件管理"], prefix="/files")
-v_router.include_router(gpu_router, tags=["GPU监控"], prefix="/gpu")
-v_router.include_router(image_router, tags=["镜像管理"])
 
 
 api_router.include_router(
