@@ -1,7 +1,0 @@
-测试Token: test_token_0bbdfdafcb859cd61d25d90644fa3ff1
-用户ID: 1
-用户名: test_user
-权限: 管理员
-
-使用方法:
-Authorization: Bearer test_token_0bbdfdafcb859cd61d25d90644fa3ff1
