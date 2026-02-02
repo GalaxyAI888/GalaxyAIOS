@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  image-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: image-api:latest
+    container_name: image-api
+    ports:
+      - "8882:8882"
+    volumes:
+      - ${MODEL_DIR:-/opt/data/models}:/opt/data/models
+      - ${OUTPUT_DIR:-/opt/data/output}:/opt/data/output
+      - ${LOGS_DIR:-/opt/data/logs}:/opt/data/logs
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_ENDPOINT=https://hf-mirror.com
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - start
+      - --model-scope-model-id
+      - ${MODEL_SCOPE_MODEL_ID:-AI-ModelScope/stable-diffusion-3.5-medium}
+      - --model-dir
+      - /opt/data/models
+      - --output-dir
+      - /opt/data/output
+      - --logs-dir
+      - /opt/data/logs
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8882"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8882/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
