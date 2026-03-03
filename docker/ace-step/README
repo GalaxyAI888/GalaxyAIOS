@@ -1,0 +1,25 @@
+docker build -t acestep-webui:1.0.0 .
+docker build -t acestep-api:1.0.0 .
+
+docker run -d \
+  --name acestep-webui \
+  --gpus all \
+  -v /opt/data/models/ACE-Step/Ace-Step1.5:/workspace/ACE-Step-1.5/checkpoints \
+  -v /opt/data/cache:/workspace/ACE-Step-1.5/.cache \
+  -p 7860:7860 \
+  -p 8001:8001 \
+  -e ACESTEP_CONFIG_PATH=acestep-v15-turbo \
+  -e ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B \
+  ace-step-server:latest \
+  acestep --server-name 0.0.0.0 --port 7860 --enable-api
+
+docker run -d \
+  --name acestep-api \
+  --gpus all \
+  -v /opt/data/models:/models:ro \
+  -p 8001:8001 \
+  -e ACESTEP_CONFIG_PATH=acestep-v15-turbo \
+  -e ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-3B \
+  acestep-api:1.0.0
+  
+docker stop acestep-webui && docker rm acestep-webui && docker rmi acestep-webui:1.0.0

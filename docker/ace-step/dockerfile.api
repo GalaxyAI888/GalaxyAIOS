@@ -1,0 +1,56 @@
+# 使用 NVIDIA CUDA 12.8.0 运行时基础镜像
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
+
+# 避免交互式配置提示，配置国内镜像
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    HF_ENDPOINT=https://hf-mirror.com \
+    ACESTEP_CONFIG_PATH=acestep-v15-turbo \
+    ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B \
+    PATH="/root/.local/bin:$PATH"
+
+# 更换阿里云 apt 源并安装系统依赖
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources && \
+    sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        wget \
+        git \
+        libgomp1 \
+        && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+        && apt-get clean
+
+# 安装 uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 设置工作目录
+WORKDIR /workspace
+
+# 克隆 ACE-Step-1.5 仓库并安装依赖
+# 使用 uv sync 创建项目虚拟环境（.venv在项目目录内）
+RUN git clone https://github.com/ACE-Step/ACE-Step-1.5.git && \
+    cd ACE-Step-1.5 && \
+    uv sync && \
+    # 清理缓存减小镜像体积
+    uv cache prune && \
+    rm -rf /root/.cache/pip/*
+
+# 设置工作目录为项目根目录（uv run 需要在此目录执行）
+WORKDIR /workspace/ACE-Step-1.5
+
+# 暴露 Gradio 默认端口（acestep UI）
+# 如果使用 acestep-api 模式，请改为 8000 或其他端口
+EXPOSE 7860
+
+# 健康检查（Gradio 默认路径）
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -f http://127.0.0.1:7860/health || exit 1
+
+# 使用 uv run 启动（自动使用项目目录的 .venv）
+# 默认启动 Gradio UI，可通过 docker run 覆盖为 acestep-api
+ENTRYPOINT ["uv", "run"]
+CMD ["acestep-api"]

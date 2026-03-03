@@ -1,0 +1,49 @@
+# 使用 NVIDIA CUDA 12.8.0 运行时基础镜像
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
+
+# 避免交互式配置提示
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8
+
+# 安装依赖并清理缓存（合并 RUN 减少镜像层）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    ca-certificates \
+    curl \
+    # 添加必要工具用于健康检查
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    && apt-get clean
+
+# 创建工作目录并设置权限
+WORKDIR /app
+RUN mkdir -p /app/data
+
+# 复制可执行文件并设置权限（分离 COPY 和 RUN 以便利用缓存层）
+COPY sd-server /app/sd-server
+RUN chmod +x /app/sd-server
+
+# 暴露端口
+EXPOSE 7860
+
+# 健康检查（实际检查 HTTP 端点，而不是单纯检查进程）
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://127.0.0.1:7860/health || exit 1
+
+# 使用 ENTRYPOINT 脚本增加灵活性（可选但推荐）
+# 如果不需要动态参数，可以直接使用 EXEC 格式
+ENTRYPOINT ["/app/sd-server"]
+
+# 默认参数（可通过 docker run 覆盖）
+CMD ["-m", "/models/sd3.5_medium.safetensors", \
+     "--clip_l", "/models/clip_l.safetensors", \
+     "--clip_g", "/models/clip_g.safetensors", \
+     "--t5xxl", "/models/t5xxl_fp8_e4m3fn.safetensors", \
+     "-H", "1024", \
+     "-W", "1024", \
+     "--cfg-scale", "4.5", \
+     "--sampling-method", "euler", \
+     "-v", \
+     "--clip-on-cpu", \
+     "--listen-ip", "0.0.0.0", \
+     "--listen-port", "7860"]
