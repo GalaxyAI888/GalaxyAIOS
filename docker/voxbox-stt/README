@@ -1,0 +1,11 @@
+docker build -t voxbox-stt-server:latest .
+
+docker run -d \
+  --name voxbox1 \
+  --gpus all \
+  -p 7861:7861\
+  -v /opt/data/models:/models:ro \
+  -w /workspace \
+  voxbox-stt-server:latest
+
+docker stop voxbox1 && docker rm voxbox1 && docker rmi voxbox-stt-server:latest

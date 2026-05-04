@@ -1,0 +1,26 @@
+docker build -t sd3.5-cuda12.8-stablediffusioncpp:1.0.0 .
+
+docker run -d \
+  --name sd35 \
+  --gpus all \
+  -v /opt/data/output/sd35:/app/output \
+  -v /opt/data/models:/app/models:ro \ 
+  -p 7860:7860 \ 
+  sd3.5-cuda12.8-stablediffusioncpp:1.0.0
+
+docker run -d \
+  --name sd35 \
+  --gpus all \
+  --shm-size=8g \                    # 关键：共享内存，防止总线错误
+  --memory=16g \                     # 限制容器内存（根据模型大小调整）
+  --cpus=8 \                         # 限制 CPU 核心数
+  -v /opt/data/output/sd35:/app/output \
+  -v /opt/data/models:/app/models:ro \ # 只读挂载模型
+  -p 7860:7860 \           # 安全：仅本地访问（如需公网加反代）
+  --restart=unless-stopped \         # 自动重启策略
+  --security-opt=no-new-privileges:true \  # 禁止提权
+  --cap-drop=ALL \                   # 丢弃所有 capabilities
+  sd3.5-cuda12.8-stablediffusioncpp:1.0.0
+
+
+docker stop sd35 && docker rm sd35 && docker rmi sd3.5-cuda12.8-stablediffusioncpp:1.0.0
