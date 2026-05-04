@@ -1,0 +1,182 @@
+# OpenClaw K8s 部署模板（与云端 Parse AIApp JSON 保持一致）
+# 说明: 此文件为参考文档，实际部署由 AgentManager 前端组件从云端 AIApp JSON 动态生成
+
+---
+# PVC: 持久化存储（openclaw 工作区和配置文件）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openclaw-home
+  labels:
+    app: openclaw
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Deployment: openclaw gateway 主容器
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw
+  labels:
+    app: openclaw
+    agent-type: openclaw
+  annotations:
+    agent-type: openclaw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: openclaw
+        agent-type: openclaw
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-config
+          image: busybox:1.37
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /home/node/.openclaw/workspace
+              mkdir -p /home/node/.openclaw/devices
+              chown -R 1000:1000 /home/node/.openclaw
+              if [ -f /home/node/.openclaw/openclaw.json ]; then
+                echo "Config exists, skip init"
+              else
+                echo '{"gateway":{"mode":"local","bind":"lan","port":18789,"auth":{"mode":"token"},"controlUi":{"enabled":true,"allowedOrigins":["*"],"dangerouslyDisableDeviceAuth":true}},"agents":{"defaults":{"workspace":"~/.openclaw/workspace"},"list":[{"id":"default","name":"openclaw-agent","workspace":"~/.openclaw/workspace"}]},"cron":{"enabled":false}}' > /home/node/.openclaw/openclaw.json
+              fi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 50m
+            limits:
+              memory: 64Mi
+              cpu: 100m
+          volumeMounts:
+            - name: openclaw-data
+              mountPath: /home/node/.openclaw
+      containers:
+        - name: gateway
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/ghcr.io/openclaw/openclaw:2026.4.26
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - /app/dist/index.js
+            - gateway
+            - run
+            - --allow-unconfigured
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: openclaw-config
+                optional: true
+            - secretRef:
+                name: openclaw-secret
+                optional: true
+          env:
+            - name: HOME
+              value: /home/node
+            - name: OPENCLAW_CONFIG_DIR
+              value: /home/node/.openclaw
+            - name: NODE_ENV
+              value: production
+            - name: AGENT_TYPE
+              value: openclaw
+            - name: OPENCLAW_GATEWAY_BIND
+              value: lan
+            - name: OPENCLAW_GATEWAY_PORT
+              value: "18789"
+            - name: NPM_CONFIG_REGISTRY
+              value: https://registry.npmmirror.com
+            - name: PIP_INDEX_URL
+              value: https://pypi.tuna.tsinghua.edu.cn/simple
+            - name: PIP_EXTRA_INDEX_URL
+              value: https://mirrors.aliyun.com/pypi/simple/
+            - name: OPENCLAW_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              memory: 4Gi
+              cpu: "2"
+            limits:
+              memory: 8Gi
+              cpu: "4"
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 18789
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 18789
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 18789
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: openclaw-data
+              mountPath: /home/node/.openclaw
+            - name: tmp-volume
+              mountPath: /tmp
+      volumes:
+        - name: openclaw-data
+          persistentVolumeClaim:
+            claimName: openclaw-home
+        - name: tmp-volume
+          emptyDir: {}
+
+---
+# Service: NodePort 暴露 gateway 端口
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw
+  labels:
+    app: openclaw
+    agent-type: openclaw
+spec:
+  type: NodePort
+  selector:
+    app: openclaw
+  ports:
+    - name: gateway
+      port: 18789
+      targetPort: 18789
+      nodePort: 31001
+      protocol: TCP

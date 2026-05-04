@@ -1,0 +1,304 @@
+# ==========================================
+# 1. Namespace
+# ==========================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hermes-agent
+
+---
+# ==========================================
+# 2. ConfigMap & Secret（环境变量与密钥分离）
+# ==========================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-env
+  namespace: hermes-agent
+data:
+  LLM_PROVIDER: "custom"
+  LLM_MODEL: "gemma-4-E4B-it-Q4_K_M.gguf"
+  LLM_BASE_URL: "http://172.22.104.77:30084/v1"
+  LLM_API_MODE: "chat_completions"
+  LLM_CONTEXT_LENGTH: "32768"
+  # 本地 LLM provider 配置（兼容 OpenAI API 格式）
+  # provider 名称: local-llama
+  # 如需接入 Telegram/Discord 等，可在此追加配置
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hermes-secrets
+  namespace: hermes-agent
+type: Opaque
+stringData:
+  LLM_API_KEY: "test"
+  API_AUTH_TOKEN: "rZLPORqS4VmvOj0K50NcYQfeBFyop649"
+  API_SERVER_KEY: "rZLPORqS4VmvOj0K50NcYQfeBFyop649"
+
+---
+# ==========================================
+# 3. PVC（会话/记忆/技能持久化）
+# ==========================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-data
+  namespace: hermes-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi   # 随技能/会话增长，建议 20Gi+
+
+---
+# ==========================================
+# 4. Redis（可选，用于跨会话状态与消息队列）
+# ==========================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hermes-redis
+  namespace: hermes-agent
+spec:
+  serviceName: hermes-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-redis
+  template:
+    metadata:
+      labels:
+        app: hermes-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command:
+          - redis-server
+          - --appendonly
+          - "yes"
+          - --appendfsync
+          - everysec
+          - --maxmemory
+          - 1gb
+          - --maxmemory-policy
+          - allkeys-lru
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 5Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-redis
+  namespace: hermes-agent
+spec:
+  selector:
+    app: hermes-redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+
+---
+# ==========================================
+# 5. Hermes Gateway（核心 Agent 服务）
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-gateway
+  namespace: hermes-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-gateway
+  template:
+    metadata:
+      labels:
+        app: hermes-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: nousresearch/hermes-agent:latest
+        command: ["/opt/hermes/.venv/bin/hermes"]
+        args: ["gateway", "run"]
+        ports:
+        - containerPort: 8642
+          name: http
+        envFrom:
+        - configMapRef:
+            name: hermes-env
+        env:
+        - name: LLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hermes-secrets
+              key: LLM_API_KEY
+        - name: API_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hermes-secrets
+              key: API_AUTH_TOKEN
+        - name: API_SERVER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hermes-secrets
+              key: API_AUTH_TOKEN
+        - name: GATEWAY_ALLOW_ALL_USERS
+          value: "true"
+        - name: API_SERVER_ENABLED
+          value: "true"
+        - name: API_SERVER_PORT
+          value: "8642"
+        - name: API_SERVER_HOST
+          value: "0.0.0.0"
+        - name: REDIS_URL
+          value: "redis://hermes-redis:6379"
+        volumeMounts:
+        - name: data
+          mountPath: /opt/data
+        resources:
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8642
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8642
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: hermes-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-gateway
+  namespace: hermes-agent
+spec:
+  selector:
+    app: hermes-gateway
+  ports:
+  - name: hermes-gateway
+    port: 8642
+    targetPort: 8642
+    nodePort: 31002
+    protocol: TCP
+  type: NodePort
+
+---
+# ==========================================
+# 6. Hermes Dashboard（Web UI）
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-dashboard
+  namespace: hermes-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-dashboard
+  template:
+    metadata:
+      labels:
+        app: hermes-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: nousresearch/hermes-agent:latest
+        command: ["/opt/hermes/.venv/bin/hermes"]
+        args: ["dashboard", "--host", "0.0.0.0", "--insecure"]
+        ports:
+        - containerPort: 9119
+          name: http
+        env:
+        - name: GATEWAY_HEALTH_URL
+          value: "http://hermes-gateway:8642"
+        volumeMounts:
+        - name: data
+          mountPath: /opt/data
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: hermes-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-dashboard
+  namespace: hermes-agent
+spec:
+  selector:
+    app: hermes-dashboard
+  ports:
+  - name: hermes-webui
+    port: 9119
+    targetPort: 9119
+    nodePort: 31003
+    protocol: TCP
+  type: NodePort
+
+# ---
+# ==========================================
+# 7. Ingress（根据你的集群情况启用，取消注释以下内容）
+# ==========================================
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: hermes-ingress
+#   namespace: hermes-agent
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+# spec:
+#   rules:
+#   - host: hermes.yourdomain.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: hermes-dashboard
+#             port:
+#               number: 9119

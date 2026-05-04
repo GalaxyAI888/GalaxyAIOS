@@ -1,0 +1,166 @@
+{
+    "name": "语言大模型 qwen3.6 和 gemma4",
+    "description": "支持文字大模型",
+    "version": "1.0.0",
+    "icon": "http://xxx.img",
+    "dockerfile": "http://www.byteverse.vip/aigc1.dockerfile",
+    "dockerImgUrl": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+    "imgSize": "3.3G",
+    "author": "二师兄",
+    "deployment": {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "llama-cpp",
+            "labels": {
+                "app": "llama-cpp"
+            },
+            "annotations": {
+                "description": "语言大模型",
+                "paid_level": "VIP",
+                "supportedAIGCType": "文生文",
+                "supportedModels": "Qwen,Gemma4",
+                "modelSelectionByGpuMemory": {
+                    "8-12": [
+                        {
+                            "name": "Gemma-4-E4B",
+                            "src": "modelscope://unsloth/gemma-4-E4B-it-GGUF",
+                            "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+                            "args": "-m /models/unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf --gpu-layers 99 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        },
+                        {
+                            "name": "Qwen-3.5-9B",
+                            "src": "modelscope://unsloth/Qwen3.5-9B-GGUF",
+                            "file": "Qwen3.5-9B-Q4_K_M.gguf",
+                            "args": "-m /models/unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --gpu-layers 99 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        }
+                    ],
+                    "13-20": [
+                        {
+                            "name": "Gemma-4-26B",
+                            "src": "modelscope://unsloth/gemma-4-26B-A4B-it-GGUF",
+                            "file": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+                            "args": "-m /models/unsloth/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf --gpu-layers 99 --ctx-size 16384 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        },
+                        {
+                            "name": "Qwen-3.5-9B",
+                            "src": "modelscope://unsloth/Qwen3.5-9B-GGUF",
+                            "file": "Qwen3.5-9B-Q4_K_M.gguf",
+                            "args": "-m /models/unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --gpu-layers 99 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        }
+                    ],
+                    "21-28": [
+                        {
+                            "name": "Gemma-4-26B",
+                            "src": "modelscope://unsloth/gemma-4-26B-A4B-it-GGUF",
+                            "file": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+                            "args": "-m models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf --gpu-layers 999 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        },
+                        {
+                            "name": "Qwen-3.6-27B",
+                            "src": "modelscope://unsloth/Qwen3.6-27B-GGUF",
+                            "file": "Qwen3.6-27B-Q4_K_M.gguf",
+                            "args": "-m models/qen3.5/Qwen3.6-27B-Q4_K_M.gguf --gpu-layers 999 --ctx-size 65536 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        }
+                    ],
+                    "29-48": [
+                        {
+                            "name": "Gemma-4-31B",
+                            "src": "modelscope://unsloth/gemma-4-31B-it-GGUF",
+                            "file": "gemma-4-31B-it-Q4_K_M.gguf",
+                            "args": "-m models/gemma4/gemma-4-31B-it-Q4_K_M.gguf --gpu-layers 999 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        },
+                        {
+                            "name": "Qwen-3.6-27B",
+                            "src": "modelscope://unsloth/Qwen3.6-27B-GGUF",
+                            "file": "Qwen3.6-27B-Q4_K_M.gguf",
+                            "args": "-m models/qen3.5/Qwen3.6-27B-Q4_K_M.gguf --gpu-layers 999 --ctx-size 131072 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.0 -ctk q4_0 -ctv q4_0"
+                        }
+                    ]
+                }
+            }
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {
+                    "app": "llama-cpp"
+                }
+            },
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "llama-cpp"
+                    }
+                },
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "llama-cpp",
+                            "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+                            "imagePullPolicy": "IfNotPresent",
+                            "ports": [
+                                {
+                                    "containerPort": 8080
+                                }
+                            ],
+                            "env": [
+                                {
+                                    "name": "HF_ENDPOINT",
+                                    "value": "https://hf-mirror.com"
+                                }
+                            ],
+                            "volumeMounts": [
+                                {
+                                    "name": "models",
+                                    "mountPath": "/models"
+                                },
+                                {
+                                    "name": "output",
+                                    "mountPath": "/output"
+                                }
+                            ]
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "models",
+                            "hostPath": {
+                                "path": "/opt/data/models",
+                                "type": "DirectoryOrCreate"
+                            }
+                        },
+                        {
+                            "name": "output",
+                            "hostPath": {
+                                "path": "/opt/data/output",
+                                "type": "DirectoryOrCreate"
+                            }
+                        }
+                    ],
+                    "restartPolicy": "Always"
+                }
+            }
+        }
+    },
+    "service": {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": "llama-cpp-service"
+        },
+        "spec": {
+            "type": "NodePort",
+            "ports": [
+                {
+                    "port": 8080,
+                    "targetPort": 8080,
+                    "nodePort": 30084
+                }
+            ],
+            "selector": {
+                "app": "llama-cpp"
+            }
+        }
+    }
+}
